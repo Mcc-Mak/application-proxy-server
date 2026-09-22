@@ -1,0 +1,92 @@
+services:
+
+  # ─── Apache reverse proxy + basic auth ──────────────────────────
+  proxy:
+    build: ./apache
+    image: prototype-application-proxy:latest
+    container_name: prototype-application-proxy
+    restart: unless-stopped
+    ports:
+      - "2380:80"
+    networks:
+      - prototype_application_proxy
+    depends_on:
+      - reactjs
+      - nodejs
+      - pma
+
+  # ─── ReactJS frontend (static build + nginx) ────────────────────
+  reactjs:
+    build: ./reactjs
+    image: prototype-application-proxy-reactjs:latest
+    container_name: prototype-application-proxy-reactjs
+    restart: unless-stopped
+    expose:
+      - "80"
+    networks:
+      - prototype_application_proxy
+
+  # ─── NodeJS API ─────────────────────────────────────────────────
+  nodejs:
+    build: ./nodejs
+    image: prototype-application-proxy-nodejs:latest
+    container_name: prototype-application-proxy-nodejs
+    restart: unless-stopped
+    expose:
+      - "3000"
+    environment:
+      DB_HOST: prototype-application-proxy-mysql
+      DB_PORT: "3306"
+      DB_NAME: ${MYSQL_DATABASE}
+      DB_USER: ${MYSQL_USER}
+      DB_PASS: ${MYSQL_PASSWORD}
+      NODE_ENV: production
+    networks:
+      - prototype_application_proxy
+    depends_on:
+      mysql:
+        condition: service_healthy
+
+  # ─── MySQL ──────────────────────────────────────────────────────
+  mysql:
+    image: mysql:8.0
+    container_name: prototype-application-proxy-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: ${MYSQL_DATABASE}
+      MYSQL_USER: ${MYSQL_USER}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+    volumes:
+      - ./mysql/data:/var/lib/mysql
+      - ./mysql/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    networks:
+      - prototype_application_proxy
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-p${MYSQL_ROOT_PASSWORD}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  # ─── phpMyAdmin ─────────────────────────────────────────────────
+  pma:
+    image: phpmyadmin:5-apache
+    container_name: prototype-application-proxy-pma
+    restart: unless-stopped
+    environment:
+      PMA_HOST: prototype-application-proxy-mysql
+      PMA_PORT: "3306"
+      PMA_ABSOLUTE_URI: http://hkss13:2380/pma/
+      UPLOAD_LIMIT: 64M
+    expose:
+      - "80"
+    networks:
+      - prototype_application_proxy
+    depends_on:
+      mysql:
+        condition: service_healthy
+
+
+networks:
+  prototype_application_proxy:
+    external: true
