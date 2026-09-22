@@ -164,35 +164,3 @@ auto_merge_dev_to_main:
 # = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = =
 #
 ```
-### Workflow-2: local --(manual)--> branch:`dev-001` --(auto)--> branch:`dev`; branch:`dev` --(manual)--> branch:`main`
-```mermaid
-flowchart TD
-    DEV001["🌿 dev-001 branch"]
-    DEV["🌿 dev branch"]
-    MAIN["🌿 main branch"]
-
-    DEV001 -->|"git push / commit"| T1
-
-    subgraph P1["Pipeline 1 — triggered by push to dev-001"]
-        T1["Job: auto_merge_dev_001_to_dev<br/>(only: dev-001)"]
-        T1 --> S1["apk add git"]
-        S1 --> S2["git config user.name/email"]
-        S2 --> S3["git remote set-url<br/>gitlab-ci-token:CI_JOB_TOKEN"]
-        S3 --> S4["git checkout dev"]
-        S4 --> S5["git pull origin dev"]
-        S5 --> S6["git merge origin/dev-001 --no-ff"]
-        S6 --> S7["git push origin dev"]
-    end
-
-    S7 -->|"push commit to dev<br/>(via CI_JOB_TOKEN)"| DEV
-    DEV -->|"❌ CI_JOB_TOKEN push<br/>does NOT trigger pipeline"| BROKEN["🛑 CASCADE BROKEN<br/>Pipeline 2 never runs"]
-
-    BROKEN -.->|"dev never merged into main"| MAIN
-
-    style DEV001 fill:#c8e6c9
-    style DEV fill:#bbdefb
-    style MAIN fill:#ffe0b2
-    style T1 fill:#e1bee7
-    style BROKEN fill:#ffcdd2
-    style S7 fill:#dcedc8
-```
