@@ -116,13 +116,17 @@ the file is missing, and it must exist before `docker compose build`.
 The `verify` job needs **no secrets** — see
 [ADR-0006](ADR.md#adr-0006-substitute-configuration-from-the-environment-in-ci).
 
-## Required repository settings
+## Optional repository settings
 
-| Setting | Why |
-|---|---|
-| Secret `GIT_PUSH_TOKEN` | fine-grained PAT, Contents: read+write; needed to push past branch protection, which `GITHUB_TOKEN` cannot |
-| Branch protection bypass | the PAT's account must be allowed to bypass protection on `dev` and `main` |
-| Pages source: **GitHub Actions** | otherwise `actions/deploy-pages` fails |
+Nothing here is required for a green run. Each item is needed only in the stated
+situation, and the pipeline degrades with a clear message rather than failing
+cryptically.
+
+| Setting | Needed when | Why |
+|---|---|---|
+| Secret `GIT_PUSH_TOKEN` | `dev` or `main` has branch protection | a fine-grained PAT with Contents: read+write can bypass protection, which `GITHUB_TOKEN` cannot. Without it the workflow falls back to `github.token` |
+| PAT allowed to bypass protection | the PAT exists | the token's account must be permitted to push to `dev` and `main` |
+| Pages source: **GitHub Actions** | the status page is wanted | the deploy API returns 404 while Pages is unconfigured. The workflow detects the 404, skips the deploy and warns, so an unconfigured Pages site does not redden a passing run |
 
 ## Repository layout
 

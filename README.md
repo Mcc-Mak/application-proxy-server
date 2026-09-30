@@ -136,12 +136,14 @@ of leaving the previous green page up.
 
 To enable it: **Settings → Pages → Build and deployment → Source: GitHub Actions**.
 
-### Required repository secret
+### Optional repository secret
 
-The two merge jobs push with `secrets.GIT_PUSH_TOKEN`, a fine-grained PAT with
-Contents: read+write on this repo. It is still needed to get past branch
-protection on `dev` and `main` — `GITHUB_TOKEN` cannot write to protected
-branches. The PAT account must be allowed to bypass branch protection.
+The two merge jobs push with `secrets.GIT_PUSH_TOKEN` when it exists, and fall
+back to the built-in `GITHUB_TOKEN` when it does not. Nothing needs configuring
+unless `dev` or `main` have branch protection: `GITHUB_TOKEN` cannot write to
+protected branches, so add a fine-grained PAT with Contents: read+write and allow
+its account to bypass protection. Without it, the pipeline runs on an unprotected
+repository and reports a precise error if a push is rejected.
 
 ## Documentation
 

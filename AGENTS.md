@@ -70,8 +70,14 @@ and fires only on a push to `dev-001`. Every hop is a `needs:` job inside one ru
   the state that would be released, and passes that SHA to `pages` as an output.
 - `concurrency: pipeline-dev-001` with `cancel-in-progress: false` — two runs must
   never interleave their merges.
-- Requires repo secret **`GIT_PUSH_TOKEN`** (fine-grained PAT, Contents: read+write)
-  solely to push past branch protection; `GITHUB_TOKEN` cannot.
+- The merge jobs push with `secrets.GIT_PUSH_TOKEN || github.token`. A PAT is
+  **optional** — it is only needed when `dev` or `main` has branch protection,
+  since `GITHUB_TOKEN` cannot write to protected branches. Do not make it
+  mandatory again: an unset secret resolves to an empty string, `actions/checkout`
+  then configures `origin` with no credentials, and every push dies with
+  `could not read Username for 'https://github.com': terminal prompts disabled`.
+  The first job warns when it is falling back, and both merge steps emit a
+  specific `::error::` if a push is rejected.
 - `verify` needs **no secrets**. Compose substitutes `${MYSQL_*}` from the process
   environment, so the job sets throwaway values in its `env:` block and never writes
   a `.env` file. MySQL data is destroyed at job end.
@@ -80,17 +86,25 @@ and fires only on a push to `dev-001`. Every hop is a `needs:` job inside one ru
   correct: the job sets `working-directory: codebase`. It uses `htpasswd -bB`
   without `-c` — with `-c` the committed `admin` entry would be destroyed. CI can
   only authenticate as the throwaway user; the real `admin` password is unknown to it.
+- `verify` waits for readiness with `docker compose ps --services --all`. The
+  `--all` is load-bearing: `docker compose ps` lists only *running* containers by
+  default, so without it the "running" and "total" counts are computed from the same
+  set, the equality holds on the first attempt, and the wait can never fail.
 - The auth assertions are **asymmetric on purpose**: `/reactjs/` must be `401`
   anonymously and `200` authenticated, while `/pma/` and `/nodejs/` are asserted
   `200` anonymously to record the current unauthenticated state. When auth is
   extended to those paths, flip those two to `401`.
 - `docker-compose.yml` declares the network `external: true`, so Compose will not
   create it. `verify` creates it explicitly before building. Any new runner or
-  machine needs the same step.- `pages` needs `pages: write` + `id-token: write` on top of `contents: write`, and
-  the repo's Pages source must be set to **GitHub Actions** or `deploy-pages` fails.
-  Its heredoc in `run: |` relies on the `HTML` terminator sitting at the same
-  indent as the body; if you edit the HTML, keep that alignment or the block
-  scalar breaks.
+  machine needs the same step.
+- `pages` needs `pages: write` + `id-token: write` on top of `contents: write`.
+  It probes the Pages API first and only calls `deploy-pages` when Pages is
+  enabled, because the deploy returns a hard 404 otherwise. That step is
+  `continue-on-error: true` on purpose: a status page is a courtesy, and it must
+  not mark a run red when the merges and the verification passed. An unconfigured
+  Pages site only produces a warning. Its heredoc in `run: |` relies on the `HTML`
+  terminator sitting at the same indent as the body; if you edit the HTML, keep
+  that alignment or the block scalar breaks.
 
 **GitHub Pages is not used to host the containers and cannot be.** It is static file
 hosting with no container runtime, so it can never `docker compose up`. The `pages`

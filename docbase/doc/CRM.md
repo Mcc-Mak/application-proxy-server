@@ -71,7 +71,7 @@ Which variable is set where and who reads it. Full values in
 | `MYSQL_PASSWORD` | `codebase/.env` | `mysql` | `DB_PASS` | throwaway |
 | `PMA_HOST` | `docker-compose.yml` | `pma` | — | same as `DB_HOST` |
 | `PMA_ABSOLUTE_URI` | `docker-compose.yml` | `pma` | — | **hardcoded** `hkss13` |
-| `GIT_PUSH_TOKEN` | repo secret | jobs 1, 2 | — | **absent by design** |
+| `GIT_PUSH_TOKEN` | repo secret, optional | jobs 1, 2 | — | **absent**; falls back to `github.token` |
 | `CI_HTPASSWD_*` | workflow `env` | job 3 | — | throwaway |
 
 ## E. Requirement-to-code index

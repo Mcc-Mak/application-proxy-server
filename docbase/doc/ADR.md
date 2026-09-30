@@ -71,10 +71,12 @@ promotion expressed as job dependencies rather than as separate triggered runs.
 
 **Consequences.** The whole promotion is one run with one status, instead of
 three runs that can be seen independently. This is also what removes the previous
-hard dependency on a token that can trigger further workflow runs; the remaining
-token is needed only to bypass branch protection. The cost is that adding a
-`push:` trigger on `dev` or `main` would double-merge, so triggers must stay
-minimal.
+hard dependency on a token that can trigger further workflow runs. The remaining
+token is needed only to bypass branch protection, and it is optional: the merge
+jobs fall back to the built-in `GITHUB_TOKEN` when no `GIT_PUSH_TOKEN` is
+configured, so an unprotected repository needs no secret at all. The cost is
+that adding a `push:` trigger on `dev` or `main` would double-merge, so triggers
+must stay minimal.
 
 ---
 

@@ -3,6 +3,74 @@
 All notable changes to this project are documented here.
 Format: [semver](https://semver.org/) — `major.minor.patch`.
 
+## [1.5.1]
+
+### Fixed
+
+Two independent failures had been reddening every run since `1.2.0`. The first
+made the pipeline unable to merge at all; the second made it red even when the
+merge and the verification succeeded.
+
+- **Merge jobs could not push: `git` exit 128, `could not read Username for
+  'https://github.com': terminal prompts disabled`.** Both merge jobs passed
+  `token: ${{ secrets.GIT_PUSH_TOKEN }}`, and that secret is not configured in
+  this repository. An unset secret resolves to an empty string, so
+  `actions/checkout` configured `origin` with no credentials at all and every
+  push failed at the credential prompt. Because `merge_dev_001_to_dev` failed,
+  `merge_dev_to_main` and `verify` were skipped, so **the stack has never
+  actually been built or tested by CI** — `verify` is unproven.
+  Both jobs now use `${{ secrets.GIT_PUSH_TOKEN || github.token }}`, so the
+  pipeline works out of the box and the PAT remains available for the one case
+  it is actually needed: bypassing branch protection, which `GITHUB_TOKEN`
+  cannot do. Job 1 also gained a step that reports which credential is in use,
+  and both merge steps wrap the push to emit a `::error::` naming branch
+  protection as the cause instead of a raw git exit code.
+- **`pages` failed with `Failed to create deployment (status: 404)`.** Pages has
+  never been enabled for this repository, so `actions/deploy-pages` could never
+  succeed. That is a courtesy report about an unconfigured repository setting,
+  not a defect in the code, but it was marking every otherwise-passing run red.
+  The job now probes the Pages API first and only calls `deploy-pages` when Pages
+  is enabled, the deploy is `continue-on-error: true`, and an unconfigured site
+  produces a `::warning` with the one-click fix. The `_site` artifact is still
+  uploaded either way, so the page appears as soon as Pages is enabled with no
+  further change.
+- **`verify`'s readiness wait could never fail.** It counted services with
+  `docker compose ps --services` and
+  `docker compose ps --services --filter status=running`, but `docker compose ps`
+  lists only *running* containers unless `--all` is passed. Both counts were
+  therefore computed from the same set, the equality held on the first attempt,
+  and the loop exited 0 without ever waiting. A crashed or still-starting
+  service would have been reported as success. Both calls now pass `--all`.
+- `curl` in the verify job now uses `--max-time 10`, so a single hung request
+  cannot consume the whole 25-minute job budget on the first attempt and mask
+  every later assertion.
+
+### Changed
+
+- Documentation corrected on the point that caused the outage. `GIT_PUSH_TOKEN`
+  was documented as a *required* secret, which is both untrue and the direct
+  cause: `README.md`, `AGENTS.md`, `ADR.md`, `Configuration&Settings.md` and
+  `CRM.md` all presented it as mandatory, so the absence of it looked like a
+  misconfiguration rather than the normal configuration. It is now described as
+  optional and needed only for branch protection, and the "Required repository
+  settings" table became "Optional repository settings" with a needed-when
+  column.
+- Fixed a pre-existing markdown bug in `AGENTS.md` where two bullets in the
+  pipeline section had run together onto one line, rendering as a single
+  mangled bullet.
+
+### Verified
+
+- Workflow YAML parses; the `needs:` chain is still
+  `merge_dev_001_to_dev → merge_dev_to_main → verify → pages` with `pages` on
+  `if: always()`.
+- All 19 `run:` blocks pass `bash -n`. (The first run of this check reported 9
+  failures that were pure CRLF: Python's `text=True` rewrites `\n` to `\r\n` on
+  Windows. The committed blob is LF-only and `core.autocrlf` is false, so the
+  scripts are fine; the harness was fixed instead.)
+- All relative links and heading anchors still resolve; Mermaid blocks still
+  parse.
+
 ## [1.5.0]
 
 ### Added

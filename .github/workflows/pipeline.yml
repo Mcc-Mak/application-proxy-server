@@ -51,15 +51,27 @@ jobs:
     name: Merge dev-001 into dev
     runs-on: ubuntu-latest
     steps:
+      - name: Report which push credential is in use
+        env:
+          HAS_PAT: ${{ secrets.GIT_PUSH_TOKEN != '' }}
+        run: |
+          if [ "$HAS_PAT" = "true" ]; then
+            echo "Using fine-grained PAT from secrets.GIT_PUSH_TOKEN (can bypass branch protection)."
+          else
+            echo "::warning title=No GIT_PUSH_TOKEN secret::Falling back to the built-in GITHUB_TOKEN. Pushes will fail if 'dev' or 'main' have branch protection enabled. Add a PAT with Contents:read+write to bypass it."
+          fi
+
       - name: Checkout dev
         uses: actions/checkout@v5
         with:
           ref: dev
           fetch-depth: 0
-          # GITHUB_TOKEN cannot trigger the next workflow. This PAT does not
-          # need to any more, because nothing is re-triggered -- but it is still
-          # what allows the push past branch protection.
-          token: ${{ secrets.GIT_PUSH_TOKEN }}
+          # Prefer the fine-grained PAT because GITHUB_TOKEN cannot push past
+          # branch protection. Fall back to the built-in token when no PAT is
+          # configured, so the pipeline still works on an unprotected repo
+          # instead of failing with "could not read Username for
+          # 'https://github.com': terminal prompts disabled".
+          token: ${{ secrets.GIT_PUSH_TOKEN || github.token }}
 
       - name: Configure git
         run: |
@@ -68,11 +80,15 @@ jobs:
 
       - name: Merge dev-001 into dev
         run: |
+          set -euo pipefail
           git fetch origin dev dev-001
           git checkout dev
           git reset --hard origin/dev
           git merge origin/dev-001 --no-ff -m "Auto-merge dev-001 into dev"
-          git push origin dev
+          if ! git push origin dev; then
+            echo "::error title=Push to dev rejected::The merge itself is fine; the push was denied. Either 'dev' has branch protection enabled (add secrets.GIT_PUSH_TOKEN, a fine-grained PAT with Contents: read+write, and allow it to bypass protection) or the stored credential is invalid."
+            exit 1
+          fi
 
   # ── dev -> main ─────────────────────────────────────────────────────────
   merge_dev_to_main:
@@ -85,7 +101,7 @@ jobs:
         with:
           ref: dev
           fetch-depth: 0
-          token: ${{ secrets.GIT_PUSH_TOKEN }}
+          token: ${{ secrets.GIT_PUSH_TOKEN || github.token }}
 
       - name: Configure git
         run: |
@@ -96,11 +112,15 @@ jobs:
       # pushed them. Fetching origin/dev picks that up.
       - name: Merge dev into main
         run: |
+          set -euo pipefail
           git fetch origin main dev
           git checkout main
           git reset --hard origin/main
           git merge origin/dev --no-ff -m "Auto-merge dev into main"
-          git push origin main
+          if ! git push origin main; then
+            echo "::error title=Push to main rejected::The merge itself is fine; the push was denied. Either 'main' has branch protection enabled (add secrets.GIT_PUSH_TOKEN, a fine-grained PAT with Contents: read+write, and allow it to bypass protection) or the stored credential is invalid."
+            exit 1
+          fi
 
   # ── verify the freshly merged main ──────────────────────────────────────
   verify:
@@ -163,12 +183,16 @@ jobs:
       - name: Start the stack
         run: docker compose up -d --force-recreate --remove-orphans
 
+      # `--all` is load-bearing on both calls. `docker compose ps` lists only
+      # running containers by default, so without it `total` and `running` are
+      # computed from the same set, the equality holds on the first attempt, and
+      # this step exits 0 without ever waiting or being able to fail.
       - name: Wait for every container to report running
         run: |
           set -uo pipefail
           for i in $(seq 1 30); do
-            total=$(docker compose ps --services | wc -l)
-            running=$(docker compose ps --services --filter status=running | wc -l)
+            total=$(docker compose ps --services --all | wc -l)
+            running=$(docker compose ps --services --all --filter status=running | wc -l)
             echo "attempt $i: $running/$total services running"
             if [ "$total" -gt 0 ] && [ "$running" -eq "$total" ]; then
               echo "all services running"
@@ -176,7 +200,7 @@ jobs:
             fi
             sleep 2
           done
-          docker compose ps
+          docker compose ps --all
           echo "::error::not all services came up"
           exit 1
 
@@ -188,11 +212,13 @@ jobs:
           set -uo pipefail
           fail=0
 
+          # --max-time so a request that hangs cannot consume the whole 25-minute
+          # job budget on the first attempt and mask every later assertion.
           retry() {
             local want="$1" desc="$2"; shift 2
             local code=000
             for _ in $(seq 1 20); do
-              code=$(curl -s -o /dev/null -w '%{http_code}' "$@" || echo 000)
+              code=$(curl -s --max-time 10 -o /dev/null -w '%{http_code}' "$@" || echo 000)
               [ "$code" = "$want" ] && break
               sleep 2
             done
@@ -209,7 +235,7 @@ jobs:
           retry 200 "GET /pma/"             "$GATEWAY/pma/"             || fail=1
 
           echo "--- /nodejs/api/health body:"
-          curl -sS "$GATEWAY/nodejs/api/health" || true
+          curl -sS --max-time 10 "$GATEWAY/nodejs/api/health" || true
           echo
 
           exit "$fail"
@@ -221,7 +247,7 @@ jobs:
 
           # Unauthenticated must be rejected. This is the assertion that the
           # proxy is actually acting as a gateway.
-          anon=$(curl -s -o /dev/null -w '%{http_code}' "$GATEWAY/reactjs/" || echo 000)
+          anon=$(curl -s --max-time 10 -o /dev/null -w '%{http_code}' "$GATEWAY/reactjs/" || echo 000)
           if [ "$anon" = "401" ]; then
             echo "ok   /reactjs/ rejects anonymous -> 401"
           else
@@ -231,7 +257,7 @@ jobs:
 
           # The committed `admin` password is unknown to CI, so the throwaway
           # user added above stands in for it.
-          auth=$(curl -s -o /dev/null -w '%{http_code}' \
+          auth=$(curl -s --max-time 10 -o /dev/null -w '%{http_code}' \
                  -u "$CI_HTPASSWD_USER:$CI_HTPASSWD_PASS" \
                  "$GATEWAY/reactjs/" || echo 000)
           if [ "$auth" = "200" ]; then
@@ -243,8 +269,8 @@ jobs:
 
           # Documented gap: /pma and /nodejs carry no auth block. Assert the
           # current behaviour so the gap is visible rather than assumed.
-          pma_anon=$(curl -s -o /dev/null -w '%{http_code}' "$GATEWAY/pma/" || echo 000)
-          api_anon=$(curl -s -o /dev/null -w '%{http_code}' "$GATEWAY/nodejs/api/health" || echo 000)
+          pma_anon=$(curl -s --max-time 10 -o /dev/null -w '%{http_code}' "$GATEWAY/pma/" || echo 000)
+          api_anon=$(curl -s --max-time 10 -o /dev/null -w '%{http_code}' "$GATEWAY/nodejs/api/health" || echo 000)
           echo "note /pma/  anonymous -> $pma_anon  (no auth block today)"
           echo "note /nodejs/api/health anonymous -> $api_anon  (no auth block today)"
 
@@ -327,10 +353,42 @@ jobs:
           </main></body></html>
           HTML
 
+      # A 404 here is the exact error deploy-pages reports when Pages has never
+      # been enabled. Anything else (200, or a 403 from an over-scoped token) is
+      # treated as "try the deploy anyway", because continue-on-error below
+      # already makes a wrong guess harmless.
+      - name: Detect whether GitHub Pages is enabled
+        id: pages_ready
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -uo pipefail
+          first_line=$(gh api "repos/${GITHUB_REPOSITORY}/pages" --include 2>/dev/null | head -1 || true)
+          if printf '%s' "$first_line" | grep -qE '^HTTP/[0-9.]+ 404'; then
+            echo "VERDICT=disabled" >> "$GITHUB_OUTPUT"
+            echo "Pages is not enabled for this repository."
+          else
+            echo "VERDICT=enabled" >> "$GITHUB_OUTPUT"
+            echo "Pages looks enabled; will attempt the deploy."
+          fi
+
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:
           path: _site
 
+      # Pages has to be enabled once in the repository settings (Settings ->
+      # Pages -> Source: GitHub Actions). Until someone does that, the deploy
+      # API returns 404. This step is deliberately non-blocking: it is a
+      # courtesy report, and it must not mark a run red when the merge and the
+      # verification both succeeded. The artifact is still uploaded either way,
+      # so the page appears as soon as Pages is enabled, with no code change.
       - name: Deploy to GitHub Pages
+        if: steps.pages_ready.outputs.VERDICT == 'enabled'
         uses: actions/deploy-pages@v4
+        continue-on-error: true
+
+      - name: Report Pages not enabled
+        if: steps.pages_ready.outputs.VERDICT == 'disabled'
+        run: |
+          echo "::warning title=GitHub Pages is not enabled::The status page was not deployed. Enable it once at Settings -> Pages -> Source: 'GitHub Actions'. The artifact is still attached to this run, so nothing needs to be rebuilt."
