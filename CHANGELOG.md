@@ -3,6 +3,40 @@
 All notable changes to this project are documented here.
 Format: [semver](https://semver.org/) — `major.minor.patch`.
 
+## [1.2.0]
+
+### Added
+
+- `.github/workflows/pipeline.yml` — a `pages` job that renders a static status
+  page and deploys it with `actions/deploy-pages`, reporting the verification
+  result, the merged `main` SHA and the endpoints CI asserts. Runs
+  `if: always()` so a failed verification publishes a red page instead of leaving
+  the previous green one up.
+
+### Changed
+
+- **Consolidated to a single workflow.** `auto-merge.yml` and `ci.yml` are removed
+  and replaced by `pipeline.yml`, triggered only on a push to `dev-001`, with all
+  four jobs chained by `needs:`:
+  `merge_dev_001_to_dev -> merge_dev_to_main -> verify -> pages`.
+  The merges previously relied on a push to `dev`/`main` re-triggering a workflow.
+  Chaining them means one run covers the whole promotion, so it reports a single
+  status instead of three, and a `push:` trigger on `dev`/`main` would now
+  double-merge. The old `if: github.ref == ...` guards were dropped since the run's
+  ref is `dev-001` for every job.
+- `merge_dev_to_main` now checks out `dev` (already updated by job 1) rather than
+  the triggering commit, and `verify` checks out `main` so it tests the state that
+  would be released, passing that SHA to `pages` as a job output.
+- Workflow-level `permissions` widened to `contents: write` (merges),
+  `pages: write` + `id-token: write` (Pages).
+- `README.md` and `AGENTS.md` updated for the single-workflow layout, the status
+  page, and the Pages setup step (Settings → Pages → Source: GitHub Actions).
+
+### Required setup
+
+- Repository secret `GIT_PUSH_TOKEN` is still required for branch protection.
+- GitHub Pages must be set to source **GitHub Actions**, or `deploy-pages` fails.
+
 ## [1.1.0]
 
 ### Added

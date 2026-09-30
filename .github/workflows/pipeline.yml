@@ -1,0 +1,325 @@
+name: Pipeline
+
+# One workflow, triggered only by a push to `dev-001`. Every hop is an explicit
+# job dependency inside a single run:
+#
+#   dev-001 -> merge to dev -> merge to main -> verify stack -> status page
+#
+# The merges used to rely on a push to `dev`/`main` re-triggering a workflow.
+# They no longer do, so the cascade is chained with `needs:` instead. A side
+# benefit: the whole promotion now appears as one run instead of three.
+#
+# This is CI, not CD. The stack is built and started on a throwaway
+# GitHub-hosted runner purely to prove the images build and the gateway works,
+# then torn down. Nothing is deployed to a real host.
+#
+# No repository secrets are needed for verification. The only credential used is
+# a throwaway `ci-user` appended to apache/.htpasswd inside the runner's
+# workspace for that job; it is never committed. MySQL gets an ephemeral
+# password because its data is destroyed at the end of the job.
+
+on:
+  push:
+    branches:
+      - dev-001
+  workflow_dispatch:
+
+permissions:
+  contents: write   # the two merge jobs push branches
+  pages: write      # the status page job
+  id-token: write   # required by actions/deploy-pages
+
+# Serialise whole pipelines: two runs must never interleave their merges.
+concurrency:
+  group: pipeline-dev-001
+  cancel-in-progress: false
+
+env:
+  # Compose substitutes from the process environment, so no .env file is needed
+  # and nothing secret has to be configured for verification to run.
+  MYSQL_ROOT_PASSWORD: ci-throwaway-root
+  MYSQL_DATABASE: prototype
+  MYSQL_USER: ci
+  MYSQL_PASSWORD: ci-throwaway-pass
+  CI_HTPASSWD_USER: ci-user
+  CI_HTPASSWD_PASS: ci-throwaway-pass
+  GATEWAY: http://localhost:2380
+
+jobs:
+  # ── dev-001 -> dev ──────────────────────────────────────────────────────
+  merge_dev_001_to_dev:
+    name: Merge dev-001 into dev
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout dev
+        uses: actions/checkout@v5
+        with:
+          ref: dev
+          fetch-depth: 0
+          # GITHUB_TOKEN cannot trigger the next workflow. This PAT does not
+          # need to any more, because nothing is re-triggered -- but it is still
+          # what allows the push past branch protection.
+          token: ${{ secrets.GIT_PUSH_TOKEN }}
+
+      - name: Configure git
+        run: |
+          git config user.name "GitHub Actions"
+          git config user.email "actions@github.com"
+
+      - name: Merge dev-001 into dev
+        run: |
+          git fetch origin dev dev-001
+          git checkout dev
+          git reset --hard origin/dev
+          git merge origin/dev-001 --no-ff -m "Auto-merge dev-001 into dev"
+          git push origin dev
+
+  # ── dev -> main ─────────────────────────────────────────────────────────
+  merge_dev_to_main:
+    name: Merge dev into main
+    needs: merge_dev_001_to_dev
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout dev
+        uses: actions/checkout@v5
+        with:
+          ref: dev
+          fetch-depth: 0
+          token: ${{ secrets.GIT_PUSH_TOKEN }}
+
+      - name: Configure git
+        run: |
+          git config user.name "GitHub Actions"
+          git config user.email "actions@github.com"
+
+      # `dev` already contains this run's dev-001 changes: the previous job
+      # pushed them. Fetching origin/dev picks that up.
+      - name: Merge dev into main
+        run: |
+          git fetch origin main dev
+          git checkout main
+          git reset --hard origin/main
+          git merge origin/dev --no-ff -m "Auto-merge dev into main"
+          git push origin main
+
+  # ── verify the freshly merged main ──────────────────────────────────────
+  verify:
+    name: Build stack and test connectivity + auth
+    needs: merge_dev_to_main
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    outputs:
+      main_sha: ${{ steps.record.outputs.main_sha }}
+
+    steps:
+      # Verify main, not the triggering dev-001 commit: main is what the merges
+      # just produced and is the state that would be released.
+      - name: Checkout main
+        uses: actions/checkout@v5
+        with:
+          ref: main
+
+      - name: Record the verified commit
+        id: record
+        run: echo "main_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      # The compose file declares this network `external: true`, so Compose
+      # refuses to create it. A fresh runner will not have it.
+      - name: Ensure external network exists
+        run: |
+          if ! docker network inspect prototype_application_proxy >/dev/null 2>&1; then
+            docker network create -d bridge \
+              --subnet 172.70.0.0/24 prototype_application_proxy
+          fi
+
+      # apache/Dockerfile COPYs .htpasswd, so the throwaway user has to exist
+      # before the image is built. Appended without -c, which would truncate the
+      # file and destroy the committed `admin` entry.
+      - name: Add throwaway auth user for the test
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq apache2-utils
+          htpasswd -bB "apache/.htpasswd" "$CI_HTPASSWD_USER" "$CI_HTPASSWD_PASS"
+          echo "users now in apache/.htpasswd:"
+          cut -d: -f1 "apache/.htpasswd"
+
+      - name: Build images
+        run: docker compose build
+
+      # nodejs and pma gate on `mysql: service_healthy`, so this returns only
+      # once MySQL has answered its healthcheck.
+      - name: Start the stack
+        run: docker compose up -d --force-recreate --remove-orphans
+
+      - name: Wait for every container to report running
+        run: |
+          set -uo pipefail
+          for i in $(seq 1 30); do
+            total=$(docker compose ps --services | wc -l)
+            running=$(docker compose ps --services --filter status=running | wc -l)
+            echo "attempt $i: $running/$total services running"
+            if [ "$total" -gt 0 ] && [ "$running" -eq "$total" ]; then
+              echo "all services running"
+              exit 0
+            fi
+            sleep 2
+          done
+          docker compose ps
+          echo "::error::not all services came up"
+          exit 1
+
+      - name: Show container status
+        run: docker compose ps
+
+      - name: Test connectivity
+        run: |
+          set -uo pipefail
+          fail=0
+
+          retry() {
+            local want="$1" desc="$2"; shift 2
+            local code=000
+            for _ in $(seq 1 20); do
+              code=$(curl -s -o /dev/null -w '%{http_code}' "$@" || echo 000)
+              [ "$code" = "$want" ] && break
+              sleep 2
+            done
+            if [ "$code" = "$want" ]; then
+              echo "ok   $desc -> $code"
+            else
+              echo "FAIL $desc -> $code (expected $want)"
+              return 1
+            fi
+          }
+
+          # nodejs -> mysql: proves the API and its database round-trip work.
+          retry 200 "GET /nodejs/api/health" "$GATEWAY/nodejs/api/health" || fail=1
+          retry 200 "GET /pma/"             "$GATEWAY/pma/"             || fail=1
+
+          echo "--- /nodejs/api/health body:"
+          curl -sS "$GATEWAY/nodejs/api/health" || true
+          echo
+
+          exit "$fail"
+
+      - name: Test auth
+        run: |
+          set -uo pipefail
+          fail=0
+
+          # Unauthenticated must be rejected. This is the assertion that the
+          # proxy is actually acting as a gateway.
+          anon=$(curl -s -o /dev/null -w '%{http_code}' "$GATEWAY/reactjs/" || echo 000)
+          if [ "$anon" = "401" ]; then
+            echo "ok   /reactjs/ rejects anonymous -> 401"
+          else
+            echo "FAIL /reactjs/ anonymous -> $anon (expected 401)"
+            fail=1
+          fi
+
+          # The committed `admin` password is unknown to CI, so the throwaway
+          # user added above stands in for it.
+          auth=$(curl -s -o /dev/null -w '%{http_code}' \
+                 -u "$CI_HTPASSWD_USER:$CI_HTPASSWD_PASS" \
+                 "$GATEWAY/reactjs/" || echo 000)
+          if [ "$auth" = "200" ]; then
+            echo "ok   /reactjs/ accepts $CI_HTPASSWD_USER -> 200"
+          else
+            echo "FAIL /reactjs/ authenticated -> $auth (expected 200)"
+            fail=1
+          fi
+
+          # Documented gap: /pma and /nodejs carry no auth block. Assert the
+          # current behaviour so the gap is visible rather than assumed.
+          pma_anon=$(curl -s -o /dev/null -w '%{http_code}' "$GATEWAY/pma/" || echo 000)
+          api_anon=$(curl -s -o /dev/null -w '%{http_code}' "$GATEWAY/nodejs/api/health" || echo 000)
+          echo "note /pma/  anonymous -> $pma_anon  (no auth block today)"
+          echo "note /nodejs/api/health anonymous -> $api_anon  (no auth block today)"
+
+          exit "$fail"
+
+      - name: Dump logs on failure
+        if: failure()
+        run: |
+          docker compose logs --tail=80
+          echo "--- proxy vhost ---"
+          docker compose exec -T proxy cat /usr/local/apache2/conf/extra/vhost.conf || true
+
+      - name: Tear down
+        if: always()
+        run: |
+          docker compose down -v --remove-orphans || true
+          docker network rm prototype_application_proxy || true
+
+  # ── publish a static status page ────────────────────────────────────────
+  # The honest use of GitHub Pages: it cannot host the containers, so it only
+  # reports what the pipeline verified. `always()` so a failed verification is
+  # still published rather than leaving the previous green page in place.
+  pages:
+    name: Publish status page
+    needs: [merge_dev_to_main, verify]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Build status page
+        env:
+          VERIFY_RESULT: ${{ needs.verify.result }}
+          MERGE_RESULT: ${{ needs.merge_dev_to_main.result }}
+          MAIN_SHA: ${{ needs.verify.outputs.main_sha }}
+          REF: ${{ github.ref_name }}
+        run: |
+          set -uo pipefail
+          mkdir -p _site
+          case "$VERIFY_RESULT" in
+            success) status="passed"; cls="live" ;;
+            failure) status="FAILED"; cls="failed" ;;
+            skipped) status="not run"; cls="muted" ;;
+            *)       status="$VERIFY_RESULT"; cls="muted" ;;
+          esac
+          [ -n "${MAIN_SHA:-}" ] || MAIN_SHA="$REF"
+          cat > _site/index.html <<HTML
+          <!doctype html>
+          <html lang="en"><head><meta charset="utf-8">
+          <meta name="viewport" content="width=device-width,initial-scale=1">
+          <title>Application Proxy Server</title>
+          <style>
+            body{font:16px/1.6 system-ui,sans-serif;margin:0;background:#0f172a;color:#e2e8f0}
+            main{max-width:52rem;margin:0 auto;padding:3rem 1.5rem}
+            h1{font-size:1.6rem;margin:0 0 .25rem}
+            .sub{color:#94a3b8;margin:0 0 2rem}
+            table{border-collapse:collapse;width:100%;margin-bottom:2rem}
+            th,td{text-align:left;padding:.5rem .75rem;border-bottom:1px solid #1e293b}
+            th{color:#94a3b8;font-weight:500;width:12rem}
+            code{font-family:ui-monospace,monospace;font-size:.9em;color:#7dd3fc}
+            .box{border:1px solid #1e293b;border-radius:.5rem;padding:1rem 1.25rem}
+            .live{color:#4ade80}.failed{color:#f87171}.muted{color:#94a3b8}
+          </style></head><body><main>
+          <h1>Application Proxy Server</h1>
+          <p class="sub">Apache reverse proxy gateway &middot; prototype</p>
+          <table>
+            <tr><th>Source</th><td>${REF}</td></tr>
+            <tr><th>Merged to</th><td><code>main</code> &middot; ${MERGE_RESULT}</td></tr>
+            <tr><th>Commit</th><td><code>${MAIN_SHA}</code></td></tr>
+            <tr><th>Verification</th><td class="${cls}">${status}</td></tr>
+          </table>
+          <div class="box">
+            <p><strong>Verified by CI</strong> on a throwaway runner, then destroyed:</p>
+            <p><code>/nodejs/api/health</code> 200 &middot;
+               <code>/pma/</code> 200 &middot;
+               <code>/reactjs/</code> 401 anonymous / 200 authenticated</p>
+            <p class="muted">This page is static and cannot host the containers.
+               Nothing is deployed: GitHub Pages serves files only, with no
+               container runtime. See the repository README for the
+               <code>dev-001 &rarr; dev &rarr; main</code> chain.</p>
+          </div>
+          </main></body></html>
+          HTML
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+      - name: Deploy to GitHub Pages
+        uses: actions/deploy-pages@v4

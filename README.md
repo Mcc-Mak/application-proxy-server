@@ -59,33 +59,38 @@ contradicts the "gateway safeguards everything" goal and is tracked as known deb
 
 ## CI pipeline
 
-```
-dev-001 ──auto-merge──> dev ──auto-merge──> main ──> CI: build + smoke test
-```
+A **single** workflow, `.github/workflows/pipeline.yml`, triggered only by a push
+to `dev-001`. Every hop is an explicit job dependency inside one run:
 
-| Branch | Workflow | What it does |
+| # | Job | What it does |
 |---|---|---|
-| `dev-001` | `auto-merge.yml` | merges `dev-001` into `dev` |
-| `dev` | `auto-merge.yml` | merges `dev` into `main` |
-| `main` | `ci.yml` | builds the images, starts the stack, tests connectivity + auth |
+| 1 | `merge_dev_001_to_dev` | merges `dev-001` into `dev`, pushes |
+| 2 | `merge_dev_to_main` | merges `dev` into `main`, pushes |
+| 3 | `verify` | checks out `main`, builds the images, starts the stack, tests connectivity + auth, tears down |
+| 4 | `pages` | publishes a static status page (runs even if `verify` fails) |
 
 ```mermaid
 flowchart TD
-    DEV001["dev-001"] -->|"push"| M1
-    M1["auto_merge_dev_001_to_dev<br/>merge dev-001 into dev"] --> DEV
-    DEV["dev"] -->|"push"| M2
-    M2["auto_merge_dev_to_main<br/>merge dev into main"] --> MAIN
-    MAIN["main"] -->|"push"| CI["ci.yml<br/>docker compose build + up -d<br/>test connectivity &amp; auth"]
-    CI --> DONE["torn down — CI only, nothing is deployed"]
+    P["push to dev-001"] --> M1
+    M1["1. merge_dev_001_to_dev<br/>dev-001 → dev"] --> M2
+    M2["2. merge_dev_to_main<br/>dev → main"] --> V
+    V["3. verify<br/>build + up -d<br/>test connectivity &amp; auth"] --> PG
+    PG["4. pages<br/>static status page"]
+    V -.->|"torn down"| DONE["nothing is deployed"]
 
-    style DEV001 fill:#c8e6c9
-    style DEV fill:#bbdefb
-    style MAIN fill:#ffe0b2
-    style CI fill:#e1bee7
+    style P fill:#c8e6c9
+    style M1 fill:#bbdefb
+    style M2 fill:#bbdefb
+    style V fill:#e1bee7
+    style PG fill:#ffe0b2
     style DONE fill:#ffcdd2
 ```
 
-`ci.yml` runs on a throwaway `ubuntu-latest` runner: it creates the external
+The merges used to depend on a push to `dev`/`main` re-triggering a workflow, which
+is why a PAT was strictly necessary. Chaining with `needs:` means one run covers
+the whole promotion, so it shows up as a single status instead of three.
+
+`verify` runs on a throwaway `ubuntu-latest` runner: it creates the external
 network, appends a temporary `ci-user` to `apache/.htpasswd` (the image `COPY`s
 that file, so it has to exist before the build), builds, starts the stack, then
 asserts:
@@ -99,15 +104,24 @@ It needs **no secrets**. MySQL gets an ephemeral password because the data
 directory is destroyed at the end of the job.
 
 Deployment to a real host is a separate concern and is deliberately not part of
-CI — nothing is published or promoted by this pipeline.
+this pipeline — nothing is published or promoted.
+
+### Status page
+
+`pages` builds a small static page and deploys it with `actions/deploy-pages`.
+This is the honest use of GitHub Pages: it serves files only and has no container
+runtime, so it reports the verification result rather than hosting anything.
+The page is also published when `verify` **fails**, so a red result is visible
+instead of leaving the previous green page up.
+
+To enable it: **Settings → Pages → Build and deployment → Source: GitHub Actions**.
 
 ### Required repository secret
 
-Both auto-merge jobs push with `secrets.GIT_PUSH_TOKEN`, a fine-grained PAT with
-Contents: read+write on this repo. The built-in `GITHUB_TOKEN` will not trigger
-the next workflow, so without the PAT the cascade silently stops at `dev` and
-never reaches `main`. The PAT also needs to be allowed to bypass branch
-protection on `main`.
+The two merge jobs push with `secrets.GIT_PUSH_TOKEN`, a fine-grained PAT with
+Contents: read+write on this repo. It is still needed to get past branch
+protection on `dev` and `main` — `GITHUB_TOKEN` cannot write to protected
+branches. The PAT account must be allowed to bypass branch protection.
 
 ## Documentation
 

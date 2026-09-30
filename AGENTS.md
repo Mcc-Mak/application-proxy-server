@@ -57,42 +57,52 @@ Migration notes for whoever does the move:
 
 ## Branches / CI
 
-`dev-001` → `dev` → `main`, all automated. Two workflows, deliberately separate:
+**One workflow, one trigger.** `.github/workflows/pipeline.yml` is the only workflow
+and fires only on a push to `dev-001`. Every hop is a `needs:` job inside one run:
 
-| Trigger | File | Job |
+| # | Job | Runs on |
 |---|---|---|
-| push to `dev-001` | `auto-merge.yml` | `auto_merge_dev_001_to_dev` |
-| push to `dev` | `auto-merge.yml` | `auto_merge_dev_to_main` |
-| push to `main` | `ci.yml` | `build-and-smoke-test` |
+| 1 | `merge_dev_001_to_dev` | ubuntu-latest |
+| 2 | `merge_dev_to_main` | ubuntu-latest |
+| 3 | `verify` | ubuntu-latest |
+| 4 | `pages` | ubuntu-latest, `if: always()` |
 
-`ci.yml` closes the loop: it builds the images, brings the stack up on a throwaway
-`ubuntu-latest` runner, tests connectivity and auth, then tears it down. **CI only —
-nothing is published, promoted or deployed.** Deployment to a real host is a
-separate concern (CD) and is intentionally absent.
-
-- `concurrency: auto-merge` serializes the two merges so they cannot interleave.
-  `ci.yml` uses its own `ci-main` group with `cancel-in-progress: true`.
-- Requires repo secret **`GIT_PUSH_TOKEN`** (fine-grained PAT, Contents: read+write).
-  The built-in `GITHUB_TOKEN` will **not** trigger the next workflow, so the cascade
-  to `main` silently stops without a PAT. PAT also needs branch-protection bypass.
-- `ci.yml` needs **no secrets**. Compose substitutes `${MYSQL_*}` from the process
+- Do **not** add a second workflow or a `push:` trigger on `dev`/`main`. The merges
+  used to depend on a push re-triggering the workflow; chaining with `needs:` means
+  one run covers the whole promotion. Adding a `main` trigger would double-merge.
+- The old `if: github.ref == ...` guards on the merge jobs are **gone and must stay
+  gone** — the run's ref is `dev-001` for all four jobs.
+- `merge_dev_to_main` checks out `dev`, not the triggering commit, because job 1 has
+  already pushed this run's changes there. `verify` checks out `main` so it tests
+  the state that would be released, and passes that SHA to `pages` as an output.
+- `concurrency: pipeline-dev-001` with `cancel-in-progress: false` — two runs must
+  never interleave their merges.
+- Requires repo secret **`GIT_PUSH_TOKEN`** (fine-grained PAT, Contents: read+write)
+  solely to push past branch protection; `GITHUB_TOKEN` cannot.
+- `verify` needs **no secrets**. Compose substitutes `${MYSQL_*}` from the process
   environment, so the job sets throwaway values in its `env:` block and never writes
   a `.env` file. MySQL data is destroyed at job end.
-- `ci.yml` appends a `ci-user` to `apache/.htpasswd` **before** `docker compose
+- `verify` appends a `ci-user` to `apache/.htpasswd` **before** `docker compose
   build`, because `apache/Dockerfile` `COPY`s that file. It uses `htpasswd -bB`
   without `-c` — with `-c` the committed `admin` entry would be destroyed. CI can
   only authenticate as the throwaway user; the real `admin` password is unknown to it.
-- The CI auth assertions are **asymmetric on purpose**: `/reactjs/` must be `401`
+- The auth assertions are **asymmetric on purpose**: `/reactjs/` must be `401`
   anonymously and `200` authenticated, while `/pma/` and `/nodejs/` are asserted
   `200` anonymously to record the current unauthenticated state. When auth is
   extended to those paths, flip those two to `401`.
 - `docker-compose.yml` declares the network `external: true`, so Compose will not
-  create it. `ci.yml` creates it explicitly before building. Any new runner or
+  create it. `verify` creates it explicitly before building. Any new runner or
   machine needs the same step.
+- `pages` needs `pages: write` + `id-token: write` on top of `contents: write`, and
+  the repo's Pages source must be set to **GitHub Actions** or `deploy-pages` fails.
+  Its heredoc in `run: |` relies on the `HTML` terminator sitting at the same
+  indent as the body; if you edit the HTML, keep that alignment or the block
+  scalar breaks.
 
-**GitHub Pages is not used and cannot be.** It is static file hosting with no
-container runtime, so it can never `docker compose up`. Terraform is also not an
-answer — it provisions infrastructure, it does not host anything.
+**GitHub Pages is not used to host the containers and cannot be.** It is static file
+hosting with no container runtime, so it can never `docker compose up`. The `pages`
+job only renders a status page. Terraform is also not an answer — it provisions
+infrastructure, it does not host anything.
 
 ## Build & run
 
