@@ -3,6 +3,52 @@
 All notable changes to this project are documented here.
 Format: [semver](https://semver.org/) — `major.minor.patch`.
 
+## [1.5.0]
+
+### Added
+
+- **`AGENTS.md` gained a `## Diagrams` section**, making Mermaid the required
+  notation for structure across the whole repository. It specifies the diagram
+  type to pick per kind of relationship (`flowchart` for topology and job
+  graphs, `sequenceDiagram` for request order and auth branches, `erDiagram`
+  for schema, `stateDiagram-v2` for component state), forbids box-drawing
+  characters and ASCII arrows in any `.md` file, and allows one exception: a
+  short inline path inside a sentence is fine, a fenced block of ASCII art is
+  not.
+
+  Three worked examples are included as copyable templates, plus the syntax
+  traps that produce silent or unhelpful failures — node ids are identifiers
+  rather than labels, `end` is a reserved word that breaks an entire diagram,
+  labels containing `: ( ) / -` must be quoted, `<br/>` is the only line break
+  inside a label, `%%` is the comment syntax in every diagram type, ER attribute
+  types must be a single word, and every `alt` / `else` / `loop` / `opt` needs a
+  matching `end`. It also records that `%%{init: ...}%%` directives and custom
+  themes must not be used, since GitHub's renderer ignores them and the diagram
+  would then render differently for the author than for the reader.
+
+### Changed
+
+- `docbase/doc/Architecture.md` — the hand-drawn topology box diagram is now a
+  `flowchart` with the Docker network as a subgraph, and the five-step prose
+  request flow is now a `sequenceDiagram` whose `alt` / `else` branches show
+  the authenticated and rejected paths. The two facts that the prose carried
+  but the old diagram could not express — that the auth block is per-`<Location>`
+  and so only `/reactjs` is actually protected, and that `ProxyPassReverse` is
+  what makes phpMyAdmin redirects resolve through the proxy — are retained as
+  prose beneath the diagram rather than dropped.
+- `docbase/doc/ERD.md` — the ASCII `users 1 ──< items` sketch of the implied
+  extension is now an `erDiagram`, labelled and noted as hypothetical so it
+  cannot be misread as current schema.
+- `README.md` — the ASCII routing summary is now a `flowchart`.
+
+### Verified
+
+- All 10 Mermaid blocks across the repository parse with Mermaid's own parser
+  (v11, under jsdom), not just by eye.
+- No box-drawing characters remain outside the AGENTS.md rule that names them.
+- All relative links and heading anchors still resolve; TOCTREE coverage and
+  ignore rules unchanged.
+
 ## [1.4.0]
 
 ### Added

@@ -2,11 +2,14 @@
 
 Prototype: an Apache reverse proxy acting as the sole gateway in front of a small
 container cluster, with HTTP basic authentication.
-
-```
-proxy (apache2, :2380) ──┬──> reactjs   (nginx, static CRA build)
-                         ├──> nodejs    (express API, :3000) ──> mysql (8.0)
-                         └──> pma       (phpMyAdmin)         ──> mysql
+```mermaid
+flowchart LR
+    U["Client"] --> P["proxy<br/>apache2, :2380"]
+    P --> R["reactjs<br/>nginx, static CRA build"]
+    P --> N["nodejs<br/>express API, :3000"]
+    P --> A["pma<br/>phpMyAdmin"]
+    N --> M[("mysql 8.0")]
+    A --> M
 ```
 
 Only `proxy` publishes a host port. The other three are reachable inside the

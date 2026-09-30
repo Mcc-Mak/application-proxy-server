@@ -167,6 +167,81 @@ and Compose must be invoked so it finds `codebase/.env` — run from inside `cod
   the vhost is wired in with an `Include conf/extra/vhost.conf` line appended at build
   time — there's no default `Listen`/vhost removal to fight.
 
+## Diagrams
+
+**Use Mermaid, not console art.** Anything with structure — topology, request
+order, schema, job graph — is a diagram, and GitHub renders Mermaid natively. Do
+not draw box-drawing characters (`┌─┐│└┘├▼`) or ASCII arrows in any `.md` file,
+and do not bury a relationship in prose where a diagram would state it outright.
+
+Allowed exception: a short inline path inside a sentence (`nodejs -> mysql`) is
+fine. A fenced block of ASCII art is not.
+
+Pick the type by what you are showing:
+
+| You are showing | Use |
+|---|---|
+| which service reaches which, or startup dependency order | `flowchart` |
+| request/response order, auth branches, redirects | `sequenceDiagram` |
+| tables, columns, keys, cardinality | `erDiagram` |
+| job graph and `needs:` chains, decision branches | `flowchart` |
+| component state, build stages | `flowchart` or `stateDiagram-v2` |
+
+Copy the syntax from these rather than inventing it:
+
+```mermaid
+flowchart LR
+    U["Client"] -->|"GET :2380"| P["proxy"]
+    P -->|"ProxyPass /nodejs"| N["nodejs :3000"]
+    N -->|"mysql2 pool"| M[("mysql")]
+```
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant C as Client
+    participant P as proxy
+    participant F as .htpasswd
+    C->>P: GET /reactjs/
+    P->>F: verify credentials
+    alt anonymous or wrong password
+        P-->>C: 401
+    else authenticated
+        P->>P: ProxyPass to reactjs
+        P-->>C: 200
+    end
+```
+
+```mermaid
+erDiagram
+    USERS {
+        INT id PK
+        VARCHAR_255 email UK
+    }
+    ITEMS {
+        INT id PK
+        VARCHAR_255 name
+    }
+    USERS ||--o{ ITEMS : "owns (not implemented)"
+```
+
+Mermaid is fussy, and its errors are silent or unhelpful:
+
+- **Node ids are identifiers, not labels.** `N["nodejs :3000"]` is valid;
+  `nodejs :3000` is a parse error. Keep ids alphanumeric.
+- **Never name a node `end`.** It is a reserved keyword and breaks the whole
+  diagram. `graph`, `class`, `click` and `subgraph` are also reserved.
+- **Quote any label containing `: ( ) / -` or other punctuation.** `A["GET :2380"]`,
+  never bare `A[GET :2380]`.
+- **Use `<br/>` for line breaks inside a label, never `\n`.**
+- **`%%` is the comment syntax** in every diagram type.
+- **ER attribute types must be a single word.** `VARCHAR(255)` fails to parse;
+  write `VARCHAR_255` and carry the real type in a quoted comment.
+- **Every `alt` / `else` / `loop` / `opt` in a `sequenceDiagram` needs a matching
+  `end`** — note this `end` *terminates a block*, unlike the forbidden node id.
+- **Do not use `%%{init: ...}%%` directives or custom themes.** GitHub's renderer
+  ignores them, so they render differently for you than for the reader.
+
 ## Conventions
 
 - Docker image / container names are all prefixed `prototype-application-proxy[-suffix]`

@@ -44,14 +44,23 @@ phpMyAdmin is currently the only way to modify data.
 The `items` table is a placeholder so the API and the database link have
 something real to exercise. If the prototype grows, the natural first
 relationship is ownership or authorship:
-
+```mermaid
+erDiagram
+    ITEMS {
+        INT id PK
+        VARCHAR_255 name
+        TIMESTAMP created_at
+    }
+    USERS {
+        INT id PK
+    }
+    USERS ||--o{ ITEMS : "items.owner_id -> users.id"
 ```
-users 1 ──< items        (items.owner_id -> users.id)
-```
 
-That would require a `users` table, a foreign key, and an index on
-`items.owner_id`. None of that exists today, and it is not in scope — see
-[ProjectCharter.md](ProjectCharter.md#scope).
+`USERS` is hypothetical; the relationship above is what the prototype would
+grow into, not what it has. Adopting it would require a `users` table, a foreign
+key, and an index on `items.owner_id`. None of that exists today, and it is not
+in scope — see [ProjectCharter.md](ProjectCharter.md#scope).
 
 ## Related documents
 

@@ -1,32 +1,18 @@
 # Architecture
 
 ## Topology
-
-```
-                        host port 2380
-                              │
-                    ┌─────────▼─────────┐
-                    │  proxy            │  httpd:2.4
-                    │  apache/.vhost    │  basic auth
-                    └───┬───────┬───┬───┘
-                        │       │   │
-          /reactjs/      │       │   │      /pma/
-              ┌──────────┘       │   └────────────┐
-              ▼                  ▼                ▼
-      ┌──────────────┐   ┌──────────────┐  ┌──────────────┐
-      │  reactjs     │   │  nodejs      │  │  pma         │
-      │  nginx:1.27  │   │  express     │  │  phpmyadmin  │
-      │  static CRA  │   │  :3000       │  │  :80         │
-      └──────────────┘   └──────┬───────┘  └──────┬───────┘
-                                │                 │
-                                ▼                 ▼
-                        ┌──────────────────────────────┐
-                        │  mysql   mysql:8.0          │
-                        │  bind mount mysql/data       │
-                        └──────────────────────────────┘
-
-              network: prototype_application_proxy (external)
-                        172.70.0.0/24
+```mermaid
+flowchart TD
+    C["Client<br/>host port 2380"] --> P
+    subgraph NET["network: prototype_application_proxy<br/>external, 172.70.0.0/24"]
+        direction TB
+        P["proxy<br/>httpd:2.4<br/>apache/vhost.conf<br/>basic auth"]
+        P -->|"/reactjs/"| R["reactjs<br/>nginx:1.27<br/>static CRA"]
+        P -->|"/nodejs/"| N["nodejs<br/>express :3000"]
+        P -->|"/pma/"| A["pma<br/>phpmyadmin:5<br/>:80"]
+        N -->|"mysql2"| M["mysql<br/>mysql:8.0<br/>bind mount mysql/data"]
+        A -->|"mysql client"| M
+    end
 ```
 
 Only `proxy` publishes a host port. Every other service uses `expose:`, which
@@ -34,16 +20,31 @@ documents intent without opening a route from the host.
 
 ## Request flow
 
-1. A request arrives at the host on port 2380 and lands in the Apache virtual
-   host defined in `codebase/apache/vhost.conf`.
-2. If the path begins `/reactjs`, the `<Location>` block runs basic
-   authentication against `/usr/local/apache2/conf/.htpasswd`. A failure returns
-   `401` before any backend is contacted.
-3. The path is matched to a `ProxyPass` prefix and forwarded to the backend by
-   container name on the external network.
-4. `ProxyPassReverse` rewrites the response `Location` headers so redirects
-   resolve through the proxy rather than pointing at a container name.
-5. A request for exactly `/` is redirected to `/reactjs/`.
+```mermaid
+sequenceDiagram
+    autonumber
+    participant C as Client
+    participant P as proxy
+    participant F as .htpasswd
+    participant B as backend
+    C->>P: GET /reactjs/index.html
+    P->>F: verify credentials
+    alt anonymous or wrong password
+        F-->>P: reject
+        P-->>C: 401
+    else authenticated
+        F-->>P: accept
+        P->>B: ProxyPass by container name
+        B-->>P: response
+        P->>P: ProxyPassReverse rewrites Location
+        P-->>C: 200
+    end
+```
+
+The auth block is per-`<Location>`; only `/reactjs` has one today, so the other
+routes take the `else` branch without the credential check. `ProxyPassReverse`
+is what makes phpMyAdmin redirects resolve through the proxy instead of naming a
+container. A request for exactly `/` is redirected to `/reactjs/`.
 
 `ProxyRequests Off` is set, so the proxy is not usable as a forward proxy.
 
