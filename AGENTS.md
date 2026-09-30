@@ -57,18 +57,42 @@ Migration notes for whoever does the move:
 
 ## Branches / CI
 
-`dev-001` → `dev` → `main`, both hops automated by `.github/workflows/auto-merge.yml`.
+`dev-001` → `dev` → `main`, all automated. Two workflows, deliberately separate:
 
-- `auto_merge_dev_001_to_dev`: on push to `dev-001`, merges into `dev`.
-- `auto_merge_dev_to_main`: on push to `dev`, merges into `main`.
-- `concurrency.group: auto-merge` serializes both so merges can't interleave.
+| Trigger | File | Job |
+|---|---|---|
+| push to `dev-001` | `auto-merge.yml` | `auto_merge_dev_001_to_dev` |
+| push to `dev` | `auto-merge.yml` | `auto_merge_dev_to_main` |
+| push to `main` | `ci.yml` | `build-and-smoke-test` |
+
+`ci.yml` closes the loop: it builds the images, brings the stack up on a throwaway
+`ubuntu-latest` runner, tests connectivity and auth, then tears it down. **CI only —
+nothing is published, promoted or deployed.** Deployment to a real host is a
+separate concern (CD) and is intentionally absent.
+
+- `concurrency: auto-merge` serializes the two merges so they cannot interleave.
+  `ci.yml` uses its own `ci-main` group with `cancel-in-progress: true`.
 - Requires repo secret **`GIT_PUSH_TOKEN`** (fine-grained PAT, Contents: read+write).
   The built-in `GITHUB_TOKEN` will **not** trigger the next workflow, so the cascade
   to `main` silently stops without a PAT. PAT also needs branch-protection bypass.
+- `ci.yml` needs **no secrets**. Compose substitutes `${MYSQL_*}` from the process
+  environment, so the job sets throwaway values in its `env:` block and never writes
+  a `.env` file. MySQL data is destroyed at job end.
+- `ci.yml` appends a `ci-user` to `apache/.htpasswd` **before** `docker compose
+  build`, because `apache/Dockerfile` `COPY`s that file. It uses `htpasswd -bB`
+  without `-c` — with `-c` the committed `admin` entry would be destroyed. CI can
+  only authenticate as the throwaway user; the real `admin` password is unknown to it.
+- The CI auth assertions are **asymmetric on purpose**: `/reactjs/` must be `401`
+  anonymously and `200` authenticated, while `/pma/` and `/nodejs/` are asserted
+  `200` anonymously to record the current unauthenticated state. When auth is
+  extended to those paths, flip those two to `401`.
+- `docker-compose.yml` declares the network `external: true`, so Compose will not
+  create it. `ci.yml` creates it explicitly before building. Any new runner or
+  machine needs the same step.
 
-**README.md is stale here:** it documents the pipeline as `.gitlab-ci.yml` and embeds
-the YAML inline. No `.gitlab-ci.yml` exists. Trust
-`.github/workflows/auto-merge.yml`.
+**GitHub Pages is not used and cannot be.** It is static file hosting with no
+container runtime, so it can never `docker compose up`. Terraform is also not an
+answer — it provisions infrastructure, it does not host anything.
 
 ## Build & run
 
@@ -99,8 +123,10 @@ and Compose must be invoked so it finds `codebase/.env` — run from inside `cod
 - Host port is **2380**, not 80. Only the proxy publishes a port; reactjs/nodejs/pma
   are `expose:`-only and reachable via `prototype-application-proxy-*` container names.
 - `nodejs` and `pma` wait on `mysql` via `condition: service_healthy`; don't drop that.
-- There is **no test, lint, or typecheck** in this repo. The only verification is
-  `docker compose build` + hitting the endpoints.
+- There are **no unit tests, no lint, and no typecheck** in this repo, and no test
+  runner in either Dockerfile. The only automated verification is `ci.yml`, which
+  builds the images, starts the stack and curls the endpoints — it is a smoke
+  test, not a test suite.
 - `reactjs` is create-react-app (`react-scripts`), so `CI=true npm run build` turns
   warnings into build failures.
 

@@ -3,6 +3,36 @@
 All notable changes to this project are documented here.
 Format: [semver](https://semver.org/) — `major.minor.patch`.
 
+## [1.1.0]
+
+### Added
+
+- `.github/workflows/ci.yml` — completes the chain
+  `dev-001 -> dev -> main -> docker build & up -d -> test connectivity & auth`.
+  Runs on a throwaway `ubuntu-latest` runner, creates the external Docker network,
+  appends a temporary `ci-user` to `apache/.htpasswd` (the image `COPY`s that
+  file, so it must exist before the build), builds and starts the stack, then
+  asserts `/nodejs/api/health` and `/pma/` return `200` and `/reactjs/` returns
+  `401` anonymously but `200` when authenticated. Tears everything down
+  afterwards. Requires no repository secrets.
+
+### Changed
+
+- `README.md` — removed the stale `.gitlab-ci.yml` section, which described a
+  GitLab pipeline that does not exist and embedded its YAML inline. Replaced with
+  the real GitHub Actions chain, an endpoint/auth table, and a pointer to
+  `docbase/TOCTREE.md`.
+- `AGENTS.md` — documents the two-workflow CI model and the reason CI needs no
+  secrets.
+
+### Notes
+
+- Deployment to a real host is explicitly **not** part of CI. GitHub Pages cannot
+  run containers, and a cloud VM would be CD, so neither was added.
+- `ci.yml` asserts that `/pma/` and `/nodejs/` are reachable **anonymously**. That
+  is the current, incorrect behaviour; the assertion makes the gap explicit and
+  will need flipping to `401` when auth is extended to those paths.
+
 ## [1.0.0]
 
 ### Added

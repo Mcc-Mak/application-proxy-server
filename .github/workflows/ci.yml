@@ -1,0 +1,177 @@
+name: CI
+
+# Chain:  dev-001 --auto-merge--> dev --auto-merge--> main --> [this workflow]
+#
+# This is CI, not CD. The stack is built and started on a throwaway GitHub-hosted
+# runner purely to prove the images build and the gateway actually works, then it
+# is torn down. Nothing is published and no environment is promoted. Deployment to
+# a real host is a separate concern and deliberately not handled here.
+#
+# Credentials are NOT needed. The only auth used is a throwaway `ci-user` appended
+# to apache/.htpasswd inside the runner's workspace just for this job; it is never
+# committed. MySQL gets an ephemeral password because its data is destroyed below.
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-main
+  cancel-in-progress: true
+
+env:
+  # Compose substitutes from the process environment, so no .env file is needed
+  # and nothing secret has to be configured for CI to run.
+  MYSQL_ROOT_PASSWORD: ci-throwaway-root
+  MYSQL_DATABASE: prototype
+  MYSQL_USER: ci
+  MYSQL_PASSWORD: ci-throwaway-pass
+  CI_HTPASSWD_USER: ci-user
+  CI_HTPASSWD_PASS: ci-throwaway-pass
+  GATEWAY: http://localhost:2380
+
+jobs:
+  build-and-smoke-test:
+    name: Build stack and test connectivity + auth
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v5
+        with:
+          ref: main
+
+      # The compose file declares this network `external: true`, so Compose
+      # refuses to create it. A fresh runner will not have it.
+      - name: Ensure external network exists
+        run: |
+          if ! docker network inspect prototype_application_proxy >/dev/null 2>&1; then
+            docker network create -d bridge \
+              --subnet 172.70.0.0/24 prototype_application_proxy
+          fi
+
+      # apache/Dockerfile COPYs .htpasswd, so the throwaway user has to exist
+      # before the image is built. Appended without -c, which would truncate the
+      # file and destroy the committed `admin` entry.
+      - name: Add throwaway auth user for the test
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq apache2-utils
+          htpasswd -bB "apache/.htpasswd" "$CI_HTPASSWD_USER" "$CI_HTPASSWD_PASS"
+          echo "users now in apache/.htpasswd:"
+          cut -d: -f1 "apache/.htpasswd"
+
+      - name: Build images
+        run: docker compose build
+
+      # nodejs and pma gate on `mysql: service_healthy`, so this returns only
+      # once MySQL has answered its healthcheck.
+      - name: Start the stack
+        run: docker compose up -d --force-recreate --remove-orphans
+
+      - name: Wait for every container to report running
+        run: |
+          set -uo pipefail
+          for i in $(seq 1 30); do
+            total=$(docker compose ps --services | wc -l)
+            running=$(docker compose ps --services --filter status=running | wc -l)
+            echo "attempt $i: $running/$total services running"
+            if [ "$total" -gt 0 ] && [ "$running" -eq "$total" ]; then
+              echo "all services running"
+              exit 0
+            fi
+            sleep 2
+          done
+          docker compose ps
+          echo "::error::not all services came up"
+          exit 1
+
+      - name: Show container status
+        run: docker compose ps
+
+      - name: Test connectivity
+        run: |
+          set -uo pipefail
+          fail=0
+
+          retry() {
+            local want="$1" desc="$2"; shift 2
+            local code=000
+            for _ in $(seq 1 20); do
+              code=$(curl -s -o /dev/null -w '%{http_code}' "$@" || echo 000)
+              [ "$code" = "$want" ] && break
+              sleep 2
+            done
+            if [ "$code" = "$want" ]; then
+              echo "ok   $desc -> $code"
+            else
+              echo "FAIL $desc -> $code (expected $want)"
+              return 1
+            fi
+          }
+
+          # nodejs -> mysql: proves the API and its database round-trip work.
+          retry 200 "GET /nodejs/api/health" "$GATEWAY/nodejs/api/health" || fail=1
+          retry 200 "GET /pma/"             "$GATEWAY/pma/"             || fail=1
+
+          echo "--- /nodejs/api/health body:"
+          curl -sS "$GATEWAY/nodejs/api/health" || true
+          echo
+
+          exit "$fail"
+
+      - name: Test auth
+        run: |
+          set -uo pipefail
+          fail=0
+
+          # Unauthenticated must be rejected. This is the assertion that the
+          # proxy is actually acting as a gateway.
+          anon=$(curl -s -o /dev/null -w '%{http_code}' "$GATEWAY/reactjs/" || echo 000)
+          if [ "$anon" = "401" ]; then
+            echo "ok   /reactjs/ rejects anonymous -> 401"
+          else
+            echo "FAIL /reactjs/ anonymous -> $anon (expected 401)"
+            fail=1
+          fi
+
+          # The committed `admin` password is unknown to CI, so the throwaway
+          # user added above stands in for it.
+          auth=$(curl -s -o /dev/null -w '%{http_code}' \
+                 -u "$CI_HTPASSWD_USER:$CI_HTPASSWD_PASS" \
+                 "$GATEWAY/reactjs/" || echo 000)
+          if [ "$auth" = "200" ]; then
+            echo "ok   /reactjs/ accepts $CI_HTPASSWD_USER -> 200"
+          else
+            echo "FAIL /reactjs/ authenticated -> $auth (expected 200)"
+            fail=1
+          fi
+
+          # Documented gap: /pma and /nodejs carry no auth block. Assert the
+          # current behaviour so the gap is visible rather than assumed.
+          pma_anon=$(curl -s -o /dev/null -w '%{http_code}' "$GATEWAY/pma/" || echo 000)
+          api_anon=$(curl -s -o /dev/null -w '%{http_code}' "$GATEWAY/nodejs/api/health" || echo 000)
+          echo "note /pma/  anonymous -> $pma_anon  (no auth block today)"
+          echo "note /nodejs/api/health anonymous -> $api_anon  (no auth block today)"
+
+          exit "$fail"
+
+      - name: Dump logs on failure
+        if: failure()
+        run: |
+          docker compose logs --tail=80
+          echo "--- proxy vhost ---"
+          docker compose exec -T proxy cat /usr/local/apache2/conf/extra/vhost.conf || true
+
+      - name: Tear down
+        if: always()
+        run: |
+          docker compose down -v --remove-orphans || true
+          docker network rm prototype_application_proxy || true
