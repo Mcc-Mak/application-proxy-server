@@ -1,166 +1,180 @@
 # Application Proxy Server
+
+Prototype: an Apache reverse proxy acting as the sole gateway in front of a small
+container cluster, with HTTP basic authentication.
+```mermaid
+flowchart LR
+    U["Client"] --> P["proxy<br/>apache2, :2380"]
+    P --> R["reactjs<br/>nginx, static CRA build"]
+    P --> N["nodejs<br/>express API, :3000"]
+    P --> A["pma<br/>phpMyAdmin"]
+    N --> M[("mysql 8.0")]
+    A --> M
+```
+
+Only `proxy` publishes a host port. The other three are reachable inside the
+`prototype_application_proxy` Docker network by container name only.
+
+## Layout
+
+```
+codebase/            everything runnable
+  docker-compose.yml
+  .env.example       copy to .env
+  apache/ mysql/ nodejs/ reactjs/
+docbase/             all documentation
+  TOCTREE.md         start here
+  doc/
+```
+
+Full documentation: **[`docbase/TOCTREE.md`](docbase/TOCTREE.md)**.
+Agent-facing conventions and known defects: [`AGENTS.md`](AGENTS.md).
+
 ## Installation
+
 > [!NOTE]
 >    Create the network card manually to prevent ip range collision!
 > ```shell
 > # Create the network card for the dockers
 > docker network create -d bridge --subnet 172.70.0.0/24 prototype_application_proxy
 > ```
+
 ```shell
-# Create password for `admin`
-htpasswd -c apache/.htpasswd admin
+# .env is not committed
+cp codebase/.env.example codebase/.env
 ```
+
+```shell
+# Create the password for `admin`.
+# Add further users WITHOUT -c: it truncates the file and destroys every other user.
+htpasswd -c codebase/apache/.htpasswd admin
+htpasswd    codebase/apache/.htpasswd user2
+```
+
 ```shell
 # Build all images, and then run the containers
+cd codebase
 docker compose build --no-cache
 docker compose up -d --force-recreate
 ```
-## CI/CD Pipeline (as in `.gitlab-ci.yml`)
-### Workflow-1: local --(manual)--> branch:`dev-001` --(auto)--> branch:`dev` --(auto)--> branch:`main`
-- Visualized Workflow
+
+Compose must run from inside `codebase/`, or be given
+`--project-directory codebase`, so it finds `.env` and resolves the `./apache`
+build contexts relative to the Compose file. Full steps and troubleshooting:
+[`docbase/doc/QuickStart.md`](docbase/doc/QuickStart.md).
+
+## Endpoints
+
+| Path | Auth | Notes |
+|---|---|---|
+| `/reactjs/` | basic auth | CRA static build served by nginx |
+| `/nodejs/api/health` | **none** | `{status, db}` — proves the API→MySQL link |
+| `/nodejs/api/items` | **none** | reads the `items` table |
+| `/pma/` | **none** | phpMyAdmin |
+
+Only `/reactjs` is protected. `/pma` and `/nodejs` are currently wide open — this
+contradicts the "gateway safeguards everything" goal, and the project requires
+two or more users where only one exists. Both are recorded in
+[`docbase/doc/RTM.md`](docbase/doc/RTM.md). CI asserts the current behaviour
+explicitly so the gap stays visible.
+
+## CI pipeline
+
+A **single** workflow, `.github/workflows/pipeline.yml`, triggered only by a push
+to `dev-001`. Every hop is an explicit job dependency inside one run:
+
+| # | Job | What it does |
+|---|---|---|
+| 1 | `merge_dev_001_to_dev` | merges `dev-001` into `dev`, pushes |
+| 2 | `merge_dev_to_main` | merges `dev` into `main`, pushes |
+| 3 | `verify` | checks out `main`, builds the images, starts the stack, tests connectivity + auth, tears down |
+| 4 | `pages` | publishes a static status page (runs even if `verify` fails) |
+
 ```mermaid
 flowchart TD
-    DEV001["🌿 dev-001 branch"]
-    DEV["🌿 dev branch"]
-    MAIN["🌿 main branch"]
+    P["push to dev-001"] --> M1
+    M1["1. merge_dev_001_to_dev<br/>dev-001 → dev"] --> M2
+    M2["2. merge_dev_to_main<br/>dev → main"] --> V
+    V["3. verify<br/>build + up -d<br/>test connectivity &amp; auth"] --> PG
+    PG["4. pages<br/>static status page"]
+    V -.->|"torn down"| DONE["nothing is deployed"]
 
-    DEV001 -->|"git push / commit"| T1
-
-    subgraph P1["Pipeline 1 — triggered by push to dev-001"]
-        T1["Job: auto_merge_dev_001_to_dev<br/>(only: dev-001)"]
-        T1 --> S1["1. apk add git"]
-        S1 --> S2["2. git config user.name/email"]
-        S2 --> S3["3. git remote set-url<br/>oauth2:GIT_PUSH_TOKEN"]
-        S3 --> S4["4. git checkout dev"]
-        S4 --> S5["5. git pull origin dev"]
-        S5 --> S6["6. git merge origin/dev-001 --no-ff"]
-        S6 --> S7["7. git push origin dev"]
-    end
-
-    S7 -->|"push commit to dev<br/>(via Project Access Token)"| DEV
-    DEV -->|"push triggers new pipeline<br/>✅ PAT can trigger CI"| T2
-
-    subgraph P2["Pipeline 2 — triggered by push to dev"]
-        T2["Job: auto_merge_dev_to_main<br/>(only: dev)"]
-        T2 --> U1["1. apk add git"]
-        U1 --> U2["2. git config user.name/email"]
-        U2 --> U3["3. git remote set-url<br/>oauth2:GIT_PUSH_TOKEN"]
-        U3 --> U4["4. git checkout main"]
-        U4 --> U5["5. git pull origin main"]
-        U5 --> U6["6. git merge origin/dev --no-ff"]
-        U6 --> U7["7. git push origin main"]
-    end
-
-    U7 -->|"push commit to main"| MAIN
-    MAIN -->|"no further auto-merge job<br/>✅ chain terminates"| STOP["🛑 End of cascade"]
-
-    style DEV001 fill:#c8e6c9
-    style DEV fill:#bbdefb
-    style MAIN fill:#ffe0b2
-    style T1 fill:#e1bee7
-    style T2 fill:#e1bee7
-    style STOP fill:#ffcdd2
-    style S7 fill:#dcedc8
-    style U7 fill:#dcedc8
+    style P fill:#c8e6c9
+    style M1 fill:#bbdefb
+    style M2 fill:#bbdefb
+    style V fill:#e1bee7
+    style PG fill:#ffe0b2
+    style DONE fill:#ffcdd2
 ```
-- Config:`.gitlab-ci.yml`
-```yml
-stages:
-  - auto_merge
 
-variables:
-  GIT_STRATEGY: clone
-  GIT_DEPTH: 0
+The merges used to depend on a push to `dev`/`main` re-triggering a workflow, so
+adding a trigger on those branches would now double-merge.
 
-# 当 dev-001 有提交时，合并 dev-001 到 dev
-auto_merge_dev_001_to_dev:
-  stage: auto_merge
-  image: alpine:latest
-  only:
-    - dev-001
-  resource_group: auto_merge   # 串行化合并操作，避免并发冲突
-  script:
-    - apk add --no-cache git
-    - git config --global http.sslVerify false
-    - git config user.name "HKO-GitLab CI"
-    - git config user.email "ci@gitlab.hko.gov.hk"
-    # TODO: Uncomment for Optioin 1
-    # 使用 CI_JOB_TOKEN 推送（需确保 Job Token 有写权限）
-    # - git remote set-url origin https://gitlab-ci-token:${CI_JOB_TOKEN}@${CI_SERVER_HOST}/${CI_PROJECT_PATH}.git
-    - git remote set-url origin https://oauth2:${GIT_PUSH_TOKEN}@${CI_SERVER_HOST}/${CI_PROJECT_PATH}.git
-    - git checkout dev
-    - git pull origin dev
-    - git merge origin/dev-001 --no-ff -m "Auto-merge dev-001 into dev"
-    - git push origin dev
+`verify` runs on a throwaway `ubuntu-latest` runner: it creates the external
+network, appends a temporary `ci-user` to `codebase/apache/.htpasswd` (the image
+`COPY`s that file, so it has to exist before the build), builds, starts the stack,
+then asserts:
 
-# 当 dev 有提交时，合并 dev 到 main
-auto_merge_dev_to_main:
-  stage: auto_merge
-  image: alpine:latest
-  only:
-    - dev
-  resource_group: auto_merge   # 与上一个 job 共用资源组，保证顺序执行
-  script:
-    - apk add --no-cache git
-    - git config --global http.sslVerify false
-    - git config user.name "HKO-GitLab CI"
-    - git config user.email "ci@gitlab.hko.gov.hk"
-    # TODO: Uncomment for Optioin 1
-    # - git remote set-url origin https://gitlab-ci-token:${CI_JOB_TOKEN}@${CI_SERVER_HOST}/${CI_PROJECT_PATH}.git
-    - git remote set-url origin https://oauth2:${GIT_PUSH_TOKEN}@${CI_SERVER_HOST}/${CI_PROJECT_PATH}.git
-    - git checkout main
-    - git pull origin main
-    - git merge origin/dev --no-ff -m "Auto-merge dev into main"
-    - git push origin main
-#
-# = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = =
-#
-# Note: 启用 CI_JOB_TOKEN 推送权限（推荐）
-#
-# - Option 1: Safe but disabled `merge 'dev' to 'main'
-#
-# 启用 CI_JOB_TOKEN 推送权限（推荐）
-#
-# 配置步骤：
-# 1. 进入你的项目：Settings → CI/CD → Job token permissions
-# 2. 找到 "Allow Git push requests to the repository via CI job token" 选项
-# 3. 勾选启用
-# 4. 保存设置
-#
-# = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = =
-#
-# - Option 2: Enabled `merge 'dev' to 'main' but may not be safe (infinite push)
-#
-# 用 Project Access Token
-#
-# ### 步骤 1：创建 Project Access Token
-#
-# 1. 进入项目：**Settings → Access Tokens**
-# 2. 创建一个新 token：
-#    - **Token name**: `auto-merge-token`（任意）
-#    - **Expiration date**: 按需（可设较长）
-#    - **Role**: `Maintainer`（或至少 Developer）
-#    - **Scopes**: 勾选 **`write_repository`**（必须）和 **`api`**（可选）
-# 3. 点击创建，**复制 token 值**（只显示一次）
-#
-# ### 步骤 2：添加为 CI/CD 变量
-#
-# 1. 进入 **Settings → CI/CD → Variables**
-# 2. 添加新变量：
-#    - **Key**: `GIT_PUSH_TOKEN`
-#    - **Value**: 粘贴上面的 token
-#    - **Type**: `Variable`
-#    - **勾选** `Masked`（防止日志泄露）
-#    - **勾选** `Protected`（仅当分支为 protected 时才需要；如果 `dev-001` 不是 protected 分支，**不要勾选**，否则该变量在 `dev-001` 的 pipeline 中不可用）
-#
-# ### 步骤 3：修改 `.gitlab-ci.yml`
-#
-# 把两个 job 里的 remote URL 改成用 `GIT_PUSH_TOKEN`：
-#
-# ```yaml
-# - git remote set-url origin https://oauth2:${GIT_PUSH_TOKEN}@${CI_SERVER_HOST}/${CI_PROJECT_PATH}.git
-# ```
-#
-# = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = =
-#
-```
+- `/nodejs/api/health` returns `200` — the API and its MySQL round-trip work
+- `/pma/` returns `200`
+- `/reactjs/` returns `401` without credentials — the proxy really is a gateway
+- `/reactjs/` returns `200` with the throwaway credentials
+
+It needs **no secrets**. MySQL gets an ephemeral password because the data
+directory is destroyed at the end of the job.
+
+Deployment to a real host is a separate concern and is deliberately not part of
+this pipeline — nothing is published or promoted.
+
+### Status page
+
+`pages` builds a small static page and deploys it with `actions/deploy-pages`.
+This is the honest use of GitHub Pages: it serves files only and has no container
+runtime, so it reports the verification result rather than hosting anything. The
+page is also published when `verify` **fails**, so a red result is visible instead
+of leaving the previous green page up.
+
+To enable it: **Settings → Pages → Build and deployment → Source: GitHub Actions**.
+
+### Optional repository secret
+
+The two merge jobs push with `secrets.GIT_PUSH_TOKEN` when it exists, and fall
+back to the built-in `GITHUB_TOKEN` when it does not. Nothing needs configuring
+unless `dev` or `main` have branch protection: `GITHUB_TOKEN` cannot write to
+protected branches, so add a fine-grained PAT with Contents: read+write and allow
+its account to bypass protection. Without it, the pipeline runs on an unprotected
+repository and reports a precise error if a push is rejected.
+
+## Documentation
+
+| Document | Purpose |
+|---|---|
+| [ProjectCharter](docbase/doc/ProjectCharter.md) | Why it exists, scope, success criteria |
+| [PRD](docbase/doc/PRD.md) | User-facing requirements and current conformance |
+| [SRS](docbase/doc/SRS.md) | Numbered, testable requirements |
+| [ADR](docbase/doc/ADR.md) | Architecture decision records |
+| [Architecture](docbase/doc/Architecture.md) | Topology, request flow, known issues |
+| [API](docbase/doc/API.md) | HTTP surface and auth matrix |
+| [Schema](docbase/doc/Schema.md) | Database schema and seed data |
+| [ERD](docbase/doc/ERD.md) | Entity relationships and access paths |
+| [QuickStart](docbase/doc/QuickStart.md) | Running the stack from scratch |
+| [RTM](docbase/doc/RTM.md) | Requirement → implementation → test |
+| [CRM](docbase/doc/CRM.md) | Cross-reference matrix across requirements, code, docs and tests |
+| [Configuration & Settings](docbase/doc/Configuration&Settings.md) | Every variable, name and CI setting |
+
+## Known issues
+
+Full detail in [`AGENTS.md`](AGENTS.md) and
+[`docbase/doc/Architecture.md`](docbase/doc/Architecture.md#known-issues).
+
+- `codebase/reactjs/src/index.js` calls `/api/health`, which Apache does not
+  proxy, so the on-page health panel never populates.
+- `codebase/reactjs/package.json` has no `homepage`, so CRA emits absolute
+  `/static/...` asset paths that 404 under the `/reactjs` prefix.
+- `PMA_ABSOLUTE_URI` in `codebase/docker-compose.yml` hardcodes the host
+  `hkss13`, so phpMyAdmin redirects break on any other hostname.
+- `codebase/apache/.htpasswd` is tracked in git.
+- Only one user exists; the project requires two or more.
+- Neither `package-lock.json` is committed, so image builds are not reproducible.
+- `codebase/nodejs/` has no `.dockerignore`, so `COPY . .` would copy a local
+  `node_modules` or `.env` into the image.
