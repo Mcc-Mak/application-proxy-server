@@ -124,7 +124,7 @@ cryptically.
 
 | Setting | Needed when | Why |
 |---|---|---|
-| Secret `GIT_PUSH_TOKEN` | `dev` or `main` has branch protection | a fine-grained PAT with Contents: read+write can bypass protection, which `GITHUB_TOKEN` cannot. Without it the workflow falls back to `github.token` |
+| Secret `GIT_PUSH_TOKEN` | `dev` or `main` has branch protection | a fine-grained PAT with Contents: read+write can bypass protection, which `GITHUB_TOKEN` cannot. Optional: when absent or blank the workflow falls back to `github.token`. Trimmed and validated in bash, not selected by a `${{ }}` expression — a blank secret is truthy to the evaluator but useless to git |
 | PAT allowed to bypass protection | the PAT exists | the token's account must be permitted to push to `dev` and `main` |
 | Pages source: **GitHub Actions** | the status page is wanted | the deploy API returns 404 while Pages is unconfigured. The workflow detects the 404, skips the deploy and warns, so an unconfigured Pages site does not redden a passing run |
 

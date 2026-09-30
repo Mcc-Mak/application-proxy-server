@@ -51,32 +51,53 @@ jobs:
     name: Merge dev-001 into dev
     runs-on: ubuntu-latest
     steps:
-      - name: Report which push credential is in use
-        env:
-          HAS_PAT: ${{ secrets.GIT_PUSH_TOKEN != '' }}
-        run: |
-          if [ "$HAS_PAT" = "true" ]; then
-            echo "Using fine-grained PAT from secrets.GIT_PUSH_TOKEN (can bypass branch protection)."
-          else
-            echo "::warning title=No GIT_PUSH_TOKEN secret::Falling back to the built-in GITHUB_TOKEN. Pushes will fail if 'dev' or 'main' have branch protection enabled. Add a PAT with Contents:read+write to bypass it."
-          fi
-
       - name: Checkout dev
         uses: actions/checkout@v5
         with:
           ref: dev
           fetch-depth: 0
-          # Prefer the fine-grained PAT because GITHUB_TOKEN cannot push past
-          # branch protection. Fall back to the built-in token when no PAT is
-          # configured, so the pipeline still works on an unprotected repo
-          # instead of failing with "could not read Username for
-          # 'https://github.com': terminal prompts disabled".
-          token: ${{ secrets.GIT_PUSH_TOKEN || github.token }}
 
-      - name: Configure git
+      # The push credential is configured here instead of through checkout's
+      # `token:` input, for two reasons.
+      #
+      # First, checkout's default github.token is always valid for the current
+      # repository, so the checkout itself can never be broken by a bad secret.
+      #
+      # Second, and this is the actual bug: a secret that exists but holds only
+      # whitespace is *truthy* to the `${{ }}` expression evaluator while being
+      # useless to git. `${{ secrets.X || github.token }}` therefore hands
+      # checkout a blank credential, and the later `git fetch` in the merge step
+      # has nothing to authenticate with, so git prompts -- and fails with
+      # "could not read Username for 'https://github.com': terminal prompts
+      # disabled". Trimming and validating in bash cannot be fooled that way.
+      - name: Configure git and push credential
+        env:
+          PAT: ${{ secrets.GIT_PUSH_TOKEN }}
+          FALLBACK: ${{ github.token }}
         run: |
+          set -euo pipefail
           git config user.name "GitHub Actions"
           git config user.email "actions@github.com"
+
+          token="$(printf '%s' "${PAT:-}" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+          if [ -z "$token" ]; then
+            token="$FALLBACK"
+            echo "::warning title=No usable GIT_PUSH_TOKEN::Falling back to the built-in GITHUB_TOKEN. The push will fail only if branch protection applies to 'dev' or 'main'."
+          else
+            case "$token" in
+              *[[:space:]]*)
+                echo "::error title=GIT_PUSH_TOKEN is not a single token::The secret is set but contains whitespace, so it cannot authenticate. Clear it, or delete the secret entirely to use the built-in GITHUB_TOKEN."
+                exit 1
+                ;;
+            esac
+            echo "Using the fine-grained PAT from secrets.GIT_PUSH_TOKEN."
+          fi
+
+          # Mask it so a later git command echoing the remote URL as part of an
+          # error does not leak the credential into the log.
+          echo "::add-mask::$token"
+          git remote set-url origin "https://x-access-token:${token}@github.com/${GITHUB_REPOSITORY}.git"
+          echo "origin rewritten with an authenticated URL (token masked)."
 
       - name: Merge dev-001 into dev
         run: |
@@ -86,9 +107,10 @@ jobs:
           git reset --hard origin/dev
           git merge origin/dev-001 --no-ff -m "Auto-merge dev-001 into dev"
           if ! git push origin dev; then
-            echo "::error title=Push to dev rejected::The merge itself is fine; the push was denied. Either 'dev' has branch protection enabled (add secrets.GIT_PUSH_TOKEN, a fine-grained PAT with Contents: read+write, and allow it to bypass protection) or the stored credential is invalid."
+            echo "::error title=Push to dev rejected::The merge succeeded but the remote refused the update. If 'dev' has branch protection enabled, add secrets.GIT_PUSH_TOKEN (fine-grained PAT, Contents: read+write) and allow its account to bypass protection."
             exit 1
           fi
+          echo "pushed $(git rev-parse --short HEAD) to dev"
 
   # ── dev -> main ─────────────────────────────────────────────────────────
   merge_dev_to_main:
@@ -101,12 +123,36 @@ jobs:
         with:
           ref: dev
           fetch-depth: 0
-          token: ${{ secrets.GIT_PUSH_TOKEN || github.token }}
 
-      - name: Configure git
+      # Same credential handling as job 1, and for the same reason. See the
+      # comment there: a whitespace-only secret is truthy to `${{ }}` but
+      # useless to git.
+      - name: Configure git and push credential
+        env:
+          PAT: ${{ secrets.GIT_PUSH_TOKEN }}
+          FALLBACK: ${{ github.token }}
         run: |
+          set -euo pipefail
           git config user.name "GitHub Actions"
           git config user.email "actions@github.com"
+
+          token="$(printf '%s' "${PAT:-}" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+          if [ -z "$token" ]; then
+            token="$FALLBACK"
+            echo "::warning title=No usable GIT_PUSH_TOKEN::Falling back to the built-in GITHUB_TOKEN. The push will fail only if branch protection applies to 'main'."
+          else
+            case "$token" in
+              *[[:space:]]*)
+                echo "::error title=GIT_PUSH_TOKEN is not a single token::The secret is set but contains whitespace, so it cannot authenticate. Clear it, or delete the secret entirely to use the built-in GITHUB_TOKEN."
+                exit 1
+                ;;
+            esac
+            echo "Using the fine-grained PAT from secrets.GIT_PUSH_TOKEN."
+          fi
+
+          echo "::add-mask::$token"
+          git remote set-url origin "https://x-access-token:${token}@github.com/${GITHUB_REPOSITORY}.git"
+          echo "origin rewritten with an authenticated URL (token masked)."
 
       # `dev` already contains this run's dev-001 changes: the previous job
       # pushed them. Fetching origin/dev picks that up.
@@ -118,9 +164,10 @@ jobs:
           git reset --hard origin/main
           git merge origin/dev --no-ff -m "Auto-merge dev into main"
           if ! git push origin main; then
-            echo "::error title=Push to main rejected::The merge itself is fine; the push was denied. Either 'main' has branch protection enabled (add secrets.GIT_PUSH_TOKEN, a fine-grained PAT with Contents: read+write, and allow it to bypass protection) or the stored credential is invalid."
+            echo "::error title=Push to main rejected::The merge succeeded but the remote refused the update. If 'main' has branch protection enabled, add secrets.GIT_PUSH_TOKEN (fine-grained PAT, Contents: read+write) and allow its account to bypass protection."
             exit 1
           fi
+          echo "pushed $(git rev-parse --short HEAD) to main"
 
   # ── verify the freshly merged main ──────────────────────────────────────
   verify:

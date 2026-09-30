@@ -3,7 +3,54 @@
 All notable changes to this project are documented here.
 Format: [semver](https://semver.org/) — `major.minor.patch`.
 
+## [1.5.2]
+
+### Fixed
+
+The merge jobs still could not push, with the identical
+`could not read Username for 'https://github.com': terminal prompts disabled`.
+The `1.5.1` fix did not work, and the reason is worth recording because it is a
+trap rather than a typo.
+
+- **A `${{ secrets.X || github.token }}` expression cannot select a credential
+  safely.** `1.5.1` used that form on `actions/checkout`'s `token:` input. A
+  secret that exists but is blank, or holds only whitespace, is **truthy** to the
+  expression evaluator while being useless to git. The fallback therefore never
+  triggered, `checkout` stored a blank credential, and the later `git fetch` in
+  the merge step had nothing to authenticate with — so git prompted for a
+  username and died. The symptom is indistinguishable from "no secret set at
+  all", which is why it read as an unconfigured credential.
+  The credential is now resolved in bash, which cannot be fooled: the value is
+  trimmed of surrounding whitespace, rejected outright if whitespace remains
+  inside it, and only then substituted for `github.token` when empty.
+- **`actions/checkout` no longer receives a token at all.** It is left on its
+  default `github.token`, which is always valid for the current repository, so a
+  malformed secret can no longer break the checkout itself. After checkout, a
+  dedicated step rewrites `origin` to an authenticated URL using the resolved
+  credential and `::add-mask::`s it so a later git error cannot leak it into the
+  log. Previously the checkout and the push shared one credential path; they no
+  longer do.
+- Both merge steps log the short SHA they pushed, so a successful run states
+  exactly what reached `dev` and `main` instead of only failing visibly.
+
+### Verified
+
+The credential step is extracted from `pipeline.yml` and executed for real
+against a throwaway git repository, with the environment supplied by the harness,
+across six shapes of secret for both merge jobs: unset, empty, whitespace-only,
+valid, valid-with-trailing-newline, and containing internal whitespace. All 12
+cases select the intended credential, mask it where a token is actually used, and
+emit a hard error for the malformed one — 12/12.
+
+The shell-syntax and regression checks were also re-pointed at Git Bash. The
+`bash` on `PATH` here is the WSL stub, which neither inherits the Windows
+environment nor writes stdout to PowerShell, so its results were not trustworthy;
+every `run:` block now passes `bash -n` under a real bash (18 blocks, 0 errors),
+and the checker asserts as a regression guard that no merge job reintroduces the
+`||` expression form or drops the `::add-mask::`.
+
 ## [1.5.1]
+
 
 ### Fixed
 

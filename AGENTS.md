@@ -70,14 +70,19 @@ and fires only on a push to `dev-001`. Every hop is a `needs:` job inside one ru
   the state that would be released, and passes that SHA to `pages` as an output.
 - `concurrency: pipeline-dev-001` with `cancel-in-progress: false` — two runs must
   never interleave their merges.
-- The merge jobs push with `secrets.GIT_PUSH_TOKEN || github.token`. A PAT is
-  **optional** — it is only needed when `dev` or `main` has branch protection,
-  since `GITHUB_TOKEN` cannot write to protected branches. Do not make it
-  mandatory again: an unset secret resolves to an empty string, `actions/checkout`
-  then configures `origin` with no credentials, and every push dies with
+- The merge jobs push with a credential built in **bash**, not with a
+  `${{ secrets.GIT_PUSH_TOKEN || github.token }}` expression. A PAT is
+  **optional** — only branch protection needs it, since `GITHUB_TOKEN` cannot
+  write to protected branches. `actions/checkout` is left on its default token
+  so a bad secret cannot break the checkout, and the step then rewrites
+  `origin` with the chosen token and `::add-mask::`s it.
+  **Do not "simplify" this into an expression.** A secret that is set but blank
+  or whitespace-only is *truthy* to the expression evaluator while being useless
+  to git, so `secrets.X || github.token` hands checkout a blank credential, the
+  later `git fetch` has nothing to authenticate with, and every push dies with
   `could not read Username for 'https://github.com': terminal prompts disabled`.
-  The first job warns when it is falling back, and both merge steps emit a
-  specific `::error::` if a push is rejected.
+  Trimming and validating in bash cannot be fooled that way. Both merge steps
+  also emit a specific `::error::` if a push is rejected.
 - `verify` needs **no secrets**. Compose substitutes `${MYSQL_*}` from the process
   environment, so the job sets throwaway values in its `env:` block and never writes
   a `.env` file. MySQL data is destroyed at job end.
