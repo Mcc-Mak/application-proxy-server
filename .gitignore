@@ -1,2 +1,12 @@
+# `.env` has no slash, so git matches it at any depth - covers codebase/.env
 .env
-mysql/data
+
+# MySQL data directory. The leading ** is required: a pattern containing a slash
+# is anchored to this file's directory, so a bare `mysql/data` would only ever
+# match the repo root and would silently stop ignoring codebase/mysql/data.
+**/mysql/data
+
+# Local dev artifacts. Not shipped, but `COPY . .` in codebase/nodejs/Dockerfile
+# would otherwise pick them up and there is no .dockerignore in that service.
+**/node_modules
+**/build
