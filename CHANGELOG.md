@@ -3,6 +3,45 @@
 All notable changes to this project are documented here.
 Format: [semver](https://semver.org/) — `major.minor.patch`.
 
+## [1.4.0]
+
+### Added
+
+- `docbase/doc/Configuration&Settings.md` — the configuration reference: every
+  environment variable and its consumer, the `MYSQL_*` → `DB_*` renaming, the
+  `MYSQL_*` → `DB_*` mapping table, phpMyAdmin's settings, the network definition,
+  container and image names, base images, the credential file, the CI job and
+  permission matrix, required repository settings, the repository layout, the
+  `.gitignore` patterns with the reasoning behind the non-obvious ones, and the
+  Apache modules enabled at build time. Includes the reasoning for each entry
+  that would otherwise be guesswork, such as why `PMA_ABSOLUTE_URI` must match
+  the real hostname and why `**/mysql/data` is required.
+
+### Changed
+
+- **`docbase/doc/CRM.md` is now a Cross-Reference Matrix.** In 1.3.0 it was
+  written as a configuration reference, which duplicated what
+  `Configuration&Settings.md` now covers. It has been rewritten to answer "if I
+  change X, what else must I update?", tracing every element across the
+  dimensions it touches:
+  - **A** component — element × requirement × image × port × config × doc × test × known issue
+  - **B** route — route × backend × auth block × CI assertion × whether that is correct
+  - **C** delivery — job × what it consumes and produces × runner × failure modes
+  - **D** configuration — variable × set by × read by × renamed to × CI value
+  - **E** requirement-to-code index
+  - **F** document matrix — which document owns which concern
+  - **G** known-issue index — each defect once, with its trace and fix
+
+  Matrix B marks three rows as incorrect against the project's own goals, and
+  matrix G consolidates all nine known defects so each appears once.
+  The document ends with maintenance instructions naming which matrices must be
+  updated for which kind of change.
+- `TOCTREE.md`, `README.md` and `AGENTS.md` updated with the new document and
+  the corrected description of `CRM.md`.
+- Inbound links in `API.md`, `Architecture.md`, `ProjectCharter.md`,
+  `QuickStart.md`, `RTM.md` and `Schema.md` repointed to
+  `Configuration&Settings.md` where they referred to configuration.
+
 ## [1.3.0]
 
 ### Added

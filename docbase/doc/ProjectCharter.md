@@ -1,4 +1,4 @@
-# Project Charter
+﻿# Project Charter
 
 **Project:** Application Proxy Server
 **Status:** Prototype
@@ -28,7 +28,7 @@ In scope:
 - One Apache reverse proxy as the sole published endpoint.
 - A React single-page application, a Node.js API, phpMyAdmin and MySQL behind it.
 - HTTP basic authentication with two or more users.
-- A CI pipeline that promotes `dev-001` → `dev` → `main` and verifies each merge.
+- A CI pipeline that promotes `dev-001` ??`dev` ??`main` and verifies each merge.
 
 Explicitly **out of scope** for the prototype:
 
@@ -63,10 +63,10 @@ demonstrable but not yet machine-checked in full.
 | Risk | Mitigation |
 |---|---|
 | Authentication coverage drifts out of sync with routes | CI asserts the current per-path auth state explicitly, including the paths that are unprotected |
-| Proxy configuration silently diverges from container names | Container and image names are centralised in `codebase/docker-compose.yml` and referenced by name in `codebase/apache/vhost.conf`; both are documented in [CRM.md](CRM.md) |
+| Proxy configuration silently diverges from container names | Container and image names are centralised in `codebase/docker-compose.yml` and referenced by name in `codebase/apache/vhost.conf`; both are documented in [Configuration&Settings.md](Configuration&Settings.md) |
 | Build is not reproducible | Recorded as known debt: neither `package-lock.json` is committed |
 
 ## Related documents
 
-[PRD.md](PRD.md) · [SRS.md](SRS.md) · [ADR.md](ADR.md) ·
+[PRD.md](PRD.md) 繚 [SRS.md](SRS.md) 繚 [ADR.md](ADR.md) 繚
 [Architecture.md](Architecture.md)

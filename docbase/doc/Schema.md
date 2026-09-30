@@ -79,4 +79,4 @@ This drops all data. There is no migration tooling in this project.
 
 ## Related documents
 
-[ERD.md](ERD.md) · [API.md](API.md) · [CRM.md](CRM.md)
+[ERD.md](ERD.md) · [API.md](API.md) · [Configuration&Settings.md](Configuration&Settings.md)

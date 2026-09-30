@@ -23,7 +23,7 @@ codebase/                 everything runnable
   apache/ mysql/ nodejs/ reactjs/
 docbase/                  all documentation
   TOCTREE.md
-  doc/{PRD,SRS,ProjectCharter,ADR,Architecture,API,Schema,ERD,QuickStart,RTM,CRM}.md
+  doc/{PRD,SRS,ProjectCharter,ADR,Architecture,API,Schema,ERD,QuickStart,RTM,CRM,Configuration&Settings}.md
 .github/workflows/        the single pipeline
 README.md CHANGELOG.md AGENTS.md LICENSE .gitignore
 ```

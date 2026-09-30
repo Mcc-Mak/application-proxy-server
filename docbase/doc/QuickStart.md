@@ -126,4 +126,4 @@ docker compose down -v         # also discard the data directory
 
 ## Related documents
 
-[Architecture.md](Architecture.md) · [CRM.md](CRM.md) · [ADR.md](ADR.md)
+[Architecture.md](Architecture.md) · [Configuration&Settings.md](Configuration&Settings.md) · [ADR.md](ADR.md)

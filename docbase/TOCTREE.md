@@ -35,7 +35,8 @@ If you add a document, add it to this list. If you delete one, remove it here.
 |---|---|
 | [QuickStart.md](doc/QuickStart.md) | Getting the stack running from a clean machine |
 | [RTM.md](doc/RTM.md) | Requirements traceability matrix: requirement → implementation → test |
-| [CRM.md](doc/CRM.md) | Configuration reference: every variable, file and CI setting |
+| [CRM.md](doc/CRM.md) | Cross-reference matrix: every element traced across requirement, code, doc, test and known issue |
+| [Configuration&Settings.md](doc/Configuration&Settings.md) | Every variable, container name, base image and CI setting, with the reasoning behind the non-obvious ones |
 
 ## Conventions
 

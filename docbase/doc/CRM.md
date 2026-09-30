@@ -1,146 +1,148 @@
-# Configuration Reference
+# Cross-Reference Matrix
 
-Every variable, file and setting the stack depends on, and where it comes from.
+Where every element of the system is traced across all the other dimensions:
+which requirement it satisfies, which file configures it, which document
+explains it, what verifies it, and what is still wrong with it.
 
-## Environment variables
+Use this to answer "if I change X, what else must I update?" — that is the
+question it exists to make answerable.
 
-`codebase/.env`, never committed, copied from `codebase/.env.example`. Compose
-substitutes these at parse time, so a missing value expands to an empty string
-rather than raising an error — which is why a missing `.env` produces a confusing
-MySQL failure rather than an obvious one.
+Companion documents: [Configuration&Settings.md](Configuration&Settings.md) for
+values, [RTM.md](RTM.md) for full requirement-level detail.
 
-| Variable | Consumed by | Purpose |
+## A. Component matrix
+
+| Element | Requirement | Image / container | Port | Configured in | Documented in | Verified by | Known issue |
+|---|---|---|---|---|---|---|---|
+| `proxy` | SRS-F-01, SRS-S-03 | `prototype-application-proxy:latest` | `2380:80` | `codebase/apache/vhost.conf` | [Architecture](Architecture.md) | CI `verify` | none |
+| `reactjs` | SRS-F-02, SRS-F-05, SRS-F-06 | `…-reactjs:latest` | `80` expose | `codebase/apache/vhost.conf` | [Architecture](Architecture.md) | CI `verify` | assets 404 under prefix |
+| `nodejs` | SRS-F-03, SRS-F-07, SRS-F-08 | `…-nodejs:latest` | `3000` expose | `codebase/nodejs/server.js` | [API](API.md) | CI `verify` | no `.dockerignore`; unhandled rejection |
+| `mysql` | SRS-F-11 | `mysql:8.0` | `3306` | `codebase/mysql/init.sql` | [Schema](Schema.md) | CI `verify` | `init.sql` runs once only |
+| `pma` | SRS-F-04 | `phpmyadmin:5-apache` | `80` expose | `codebase/docker-compose.yml` | [Architecture](Architecture.md) | CI `verify` | `PMA_ABSOLUTE_URI` hardcoded |
+| network | SRS-O-01 | `prototype_application_proxy` | — | `codebase/docker-compose.yml` | [CRM-B](#b-route-matrix) | CI `verify` | `external: true`, must pre-exist |
+| credentials | SRS-F-10, SRS-S-01 | — | — | `codebase/apache/.htpasswd` | [Configuration](Configuration&Settings.md) | CI `verify` | only 1 user; tracked in git |
+| environment | SRS-O-05 | — | — | `codebase/.env` | [Configuration](Configuration&Settings.md) | CI `verify` | uncommitted; expands empty if missing |
+| pipeline | SRS-O-03, SRS-O-06, SRS-O-07 | `ubuntu-latest` | — | `.github/workflows/pipeline.yml` | [CRM-C](#c-delivery-matrix) | itself | needs `GIT_PUSH_TOKEN` |
+
+## B. Route matrix
+
+Each published path, who can reach it, and how that is proven.
+
+| Route | Backend | Auth block | CI assertion | Correct? | Requirement |
+|---|---|---|---|---|---|
+| `/` | — | — | manual | yes | SRS-F-09 |
+| `/reactjs/` | `…-reactjs:80` | `<Location /reactjs>` | `401` anon, `200` auth | yes | SRS-F-05, SRS-F-06 |
+| `/reactjs/static/*` | — | — | **none** | **no** — 404s | — |
+| `/reactjs/` → `/api/health` | — | — | **none** | **no** — unrouted | — |
+| `/nodejs/api/health` | `…-nodejs:3000` | **none** | `200` anon | **no** — should be authed | SRS-S-04 |
+| `/nodejs/api/items` | `…-nodejs:3000` | **none** | manual | **no** — should be authed | SRS-S-04 |
+| `/pma/` | `…-pma:80` | **none** | `200` anon | **no** — should be authed | SRS-S-04 |
+
+The three rows marked **no** are the reason CI asserts current behaviour rather
+than desired behaviour: encoding the gap makes it visible, and each must be
+deliberately flipped when auth is extended. See
+[ADR-0005](ADR.md#adr-0005-record-partial-authentication-coverage).
+
+## C. Delivery matrix
+
+Each stage of the pipeline, what it consumes and produces.
+
+| # | Job | Consumes | Produces | Runs on | Fails if |
+|---|---|---|---|---|---|
+| 1 | `merge_dev_001_to_dev` | `dev-001`, `dev` | `dev` | `ubuntu-latest` | merge conflict; no PAT |
+| 2 | `merge_dev_to_main` | `dev` (post-merge) | `main` | `ubuntu-latest` | merge conflict; no PAT |
+| 3 | `verify` | `main` | pass/fail | `ubuntu-latest`, cwd `codebase/` | build, start, or assertion |
+| 4 | `pages` | results of 2 and 3 | status page | `ubuntu-latest` | Pages not configured |
+
+Job 2 consumes `dev` *after* job 1 pushed, not the triggering ref. Job 3
+deliberately verifies `main`, not `dev-001`, so it tests the state that would be
+released.
+
+## D. Configuration matrix
+
+Which variable is set where and who reads it. Full values in
+[Configuration&Settings.md](Configuration&Settings.md).
+
+| Variable | Set by | Read by | Renamed to | CI value |
+|---|---|---|---|---|
+| `MYSQL_ROOT_PASSWORD` | `codebase/.env` | `mysql`, healthcheck | — | throwaway |
+| `MYSQL_DATABASE` | `codebase/.env` | `mysql` | `DB_NAME` | `prototype` |
+| `MYSQL_USER` | `codebase/.env` | `mysql` | `DB_USER` | `ci` |
+| `MYSQL_PASSWORD` | `codebase/.env` | `mysql` | `DB_PASS` | throwaway |
+| `PMA_HOST` | `docker-compose.yml` | `pma` | — | same as `DB_HOST` |
+| `PMA_ABSOLUTE_URI` | `docker-compose.yml` | `pma` | — | **hardcoded** `hkss13` |
+| `GIT_PUSH_TOKEN` | repo secret | jobs 1, 2 | — | **absent by design** |
+| `CI_HTPASSWD_*` | workflow `env` | job 3 | — | throwaway |
+
+## E. Requirement-to-code index
+
+Compact lookup. `RTM.md` carries verification detail and status.
+
+| Prefix | Area | Implementation |
 |---|---|---|
-| `MYSQL_ROOT_PASSWORD` | `mysql` | root account password; also interpolated into the healthcheck command |
-| `MYSQL_DATABASE` | `mysql`, `nodejs` | database created on first init; mapped to `DB_NAME` |
-| `MYSQL_USER` | `mysql`, `nodejs` | application account; mapped to `DB_USER` |
-| `MYSQL_PASSWORD` | `mysql`, `nodejs` | application password; mapped to `DB_PASS` |
+| SRS-F-01…03 | ingress and routing | `codebase/apache/vhost.conf` |
+| SRS-F-04…06 | authentication | `<Location /reactjs>`, `codebase/apache/.htpasswd` |
+| SRS-F-07…08 | API behaviour | `codebase/nodejs/server.js` |
+| SRS-F-09 | root redirect | `RedirectMatch` in `vhost.conf` |
+| SRS-F-10 | user count | `codebase/apache/.htpasswd` — **not met** |
+| SRS-F-11 | start ordering | `depends_on: service_healthy` |
+| SRS-S-01…05 | security | `vhost.conf`, Compose `expose:` |
+| SRS-O-01…07 | operations | `.github/workflows/pipeline.yml` |
+| SRS-D-01…05 | documentation | `AGENTS.md` checklist, review only |
+| SRS-C-01…04 | constraints | repository layout |
 
-The renaming is deliberate and is the single most confusing part of the
-configuration: the operator sets `MYSQL_*`, the application reads `DB_*`.
+## F. Document matrix
 
-### Variables the API reads
+Which document owns which concern, so updates land in the right file.
 
-Set on the `nodejs` service in `codebase/docker-compose.yml`:
-
-| Variable | Value | Source |
+| Concern | Document | Not documented in |
 |---|---|---|
-| `DB_HOST` | `prototype-application-proxy-mysql` | literal, container name |
-| `DB_PORT` | `3306` | literal |
-| `DB_NAME` | — | `MYSQL_DATABASE` |
-| `DB_USER` | — | `MYSQL_USER` |
-| `DB_PASS` | — | `MYSQL_PASSWORD` |
-| `NODE_ENV` | `production` | literal |
+| Why the project exists, scope, risks | [ProjectCharter](ProjectCharter.md) | — |
+| User-facing requirements, conformance | [PRD](PRD.md) | SRS |
+| Numbered testable requirements | [SRS](SRS.md) | PRD |
+| Decisions and their costs | [ADR](ADR.md) | Architecture |
+| Topology, request flow, known issues | [Architecture](Architecture.md) | — |
+| HTTP surface, auth matrix | [API](API.md) | CRM (route view) |
+| Tables and columns | [Schema](Schema.md) | ERD |
+| Entities and relationships | [ERD](ERD.md) | Schema |
+| Setup and troubleshooting | [QuickStart](QuickStart.md) | README |
+| Requirement → code → test | [RTM](RTM.md) | CRM (index) |
+| Variables, names, settings | [Configuration&Settings](Configuration&Settings.md) | CRM (matrix) |
+| Agent conventions and gotchas | `AGENTS.md` | docbase |
+| Change history | `CHANGELOG.md` | — |
 
-`DB_HOST` and the `DB_*` values in `codebase/apache/vhost.conf` and
-`codebase/docker-compose.yml` must stay in step with the container names.
+## G. Known-issue index
 
-### phpMyAdmin
+Consolidated so each defect appears once with its trace.
 
-| Variable | Value | Note |
-|---|---|---|
-| `PMA_HOST` | `prototype-application-proxy-mysql` | must match the MySQL container name |
-| `PMA_PORT` | `3306` | |
-| `PMA_ABSOLUTE_URI` | `http://hkss13:2380/pma/` | **hardcoded host — see below** |
-| `UPLOAD_LIMIT` | `64M` | |
-
-`PMA_ABSOLUTE_URI` is what phpMyAdmin uses to build its own links and redirects.
-If it does not match the URL you actually browse to, phpMyAdmin will redirect you
-to a host that may not resolve. **Change this to your real address**, otherwise
-the CI assertion on `/pma/` can fail on a redirect to `hkss13`.
-
-## Network
-
-| Property | Value |
-|---|---|
-| Name | `prototype_application_proxy` |
-| Declared | `external: true` |
-| Driver | `bridge` |
-| Subnet | `172.70.0.0/24` |
-
-Because it is external, Compose will not create it. It must exist before any
-Compose command, on every machine and every CI runner.
-
-## Container and image names
-
-All prefixed `prototype-application-proxy`, all tagged `latest`.
-
-| Compose service | Image | Container name | Internal port |
+| Defect | Element | Fix | Traced in |
 |---|---|---|---|
-| `proxy` | `prototype-application-proxy:latest` | `prototype-application-proxy` | `2380:80` |
-| `reactjs` | `prototype-application-proxy-reactjs:latest` | `prototype-application-proxy-reactjs` | `80` (expose) |
-| `nodejs` | `prototype-application-proxy-nodejs:latest` | `prototype-application-proxy-nodejs` | `3000` (expose) |
-| `mysql` | `mysql:8.0` | `prototype-application-proxy-mysql` | `3306` |
-| `pma` | `phpmyadmin:5-apache` | `prototype-application-proxy-pma` | `80` (expose) |
+| Static assets 404 under `/reactjs` | `reactjs` | set `"homepage"` in `package.json` | [API](API.md#routing), [Architecture](Architecture.md#known-issues) |
+| Health panel never populates | `reactjs` | fetch `/nodejs/api/health` | [API](API.md#routing) |
+| `PMA_ABSOLUTE_URI` hardcoded | `pma` | set to real hostname | [Configuration](Configuration&Settings.md#phpmyadmin) |
+| One user only | credentials | add a second with `htpasswd` | [RTM](RTM.md#gaps-and-the-work-they-imply) |
+| Auth not on every path | `proxy` | add `<Location>` blocks | [ADR-0005](ADR.md#adr-0005-record-partial-authentication-coverage) |
+| `.htpasswd` tracked in git | credentials | untrack, supply at deploy | [Configuration](Configuration&Settings.md#credential-file) |
+| Builds not reproducible | all three images | commit both lockfiles | [Architecture](Architecture.md#known-issues) |
+| No `.dockerignore` in `nodejs` | `nodejs` | add one | [Architecture](Architecture.md#known-issues) |
+| `init.sql` runs once only | `mysql` | wipe `codebase/mysql/data` | [Schema](Schema.md#reapplying-schema-changes) |
 
-`codebase/apache/vhost.conf` addresses three of these by name. Renaming a
-container without updating the vhost produces a 502 from the proxy.
+## Maintaining this matrix
 
-## Base images
+Update it in the same commit as whatever changed it. Specifically:
 
-| Service | Base | Notes |
-|---|---|---|
-| `proxy` | `httpd:2.4` | Debian layout; config under `/usr/local/apache2/` |
-| `reactjs` | `node:20-alpine` build, `nginx:1.27-alpine` run | two stages |
-| `nodejs` | `node:20-alpine` | `npm install --omit=dev` |
-| `mysql` | `mysql:8.0` | |
-| `pma` | `phpmyadmin:5-apache` | |
+- Adding or removing a service → matrices A, B, C.
+- Adding or renaming a variable → matrix D and
+  [Configuration&Settings.md](Configuration&Settings.md).
+- Changing a route or its auth → matrix B, and **flip the matching CI
+  assertion deliberately**.
+- Fixing a defect → remove its row from matrix G.
+- Adding a document → matrix F and [TOCTREE.md](../TOCTREE.md).
 
-## Credential file
-
-`codebase/apache/.htpasswd` is **tracked in git** — known debt. It is copied to
-`/usr/local/apache2/conf/.htpasswd` at build time, so the image build fails if
-the file is missing, and it must exist before `docker compose build`.
-
-`htpasswd -c` truncates the file. Use it once, then never again.
-
-## CI configuration
-
-`.github/workflows/pipeline.yml`, triggered only on a push to `dev-001`.
-
-| Job | Needs | Runner |
-|---|---|---|
-| `merge_dev_001_to_dev` | — | `ubuntu-latest` |
-| `merge_dev_to_main` | `merge_dev_001_to_dev` | `ubuntu-latest` |
-| `verify` | `merge_dev_to_main` | `ubuntu-latest`, `working-directory: codebase` |
-| `pages` | both above, `if: always()` | `ubuntu-latest` |
-
-### Required repository settings
-
-| Setting | Why |
-|---|---|
-| Secret `GIT_PUSH_TOKEN` | fine-grained PAT, Contents: read+write; needed to push past branch protection, which `GITHUB_TOKEN` cannot |
-| Branch protection bypass | the PAT's account must be allowed to bypass protection on `dev` and `main` |
-| Pages source: **GitHub Actions** | otherwise `actions/deploy-pages` fails |
-
-The `verify` job needs **no secrets** — see
-[ADR-0006](ADR.md#adr-0006-substitute-configuration-from-the-environment-in-ci).
-`concurrency: pipeline-dev-001` with `cancel-in-progress: false` prevents two
-runs from interleaving their merges.
-
-## Repository layout
-
-| Path | Contents |
-|---|---|
-| `codebase/docker-compose.yml` | the whole runnable stack |
-| `codebase/.env.example` | template; `codebase/.env` is generated and ignored |
-| `codebase/{apache,mysql,nodejs,reactjs}/` | the four services |
-| `docbase/` | all documentation |
-| `.github/workflows/` | the single pipeline |
-
-Compose must be invoked from `codebase/`, or given
-`--project-directory codebase`, so it finds the environment file and resolves
-build contexts relative to the Compose file.
-
-## `.gitignore` patterns
-
-| Pattern | Why it is written that way |
-|---|---|
-| `.env` | no slash, so it matches at any depth — still correct under `codebase/` |
-| `**/mysql/data` | a pattern containing a slash is anchored to the `.gitignore`'s directory, so a bare `mysql/data` would stop matching once the path became `codebase/mysql/data` |
-| `**/node_modules`, `**/build` | local build artefacts, not shipped |
+If a cell cannot be filled honestly, that is the finding. `—` under
+"Verified by" means nothing checks it; "manual" means a human must.
 
 ## Related documents
 
-[QuickStart.md](QuickStart.md) · [Architecture.md](Architecture.md) ·
-[ADR.md](ADR.md) · [Schema.md](Schema.md)
+[Configuration&Settings.md](Configuration&Settings.md) · [RTM.md](RTM.md) ·
+[SRS.md](SRS.md) · [ADR.md](ADR.md)

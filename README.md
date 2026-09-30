@@ -154,7 +154,8 @@ branches. The PAT account must be allowed to bypass branch protection.
 | [ERD](docbase/doc/ERD.md) | Entity relationships and access paths |
 | [QuickStart](docbase/doc/QuickStart.md) | Running the stack from scratch |
 | [RTM](docbase/doc/RTM.md) | Requirement → implementation → test |
-| [CRM](docbase/doc/CRM.md) | Every variable, name and CI setting |
+| [CRM](docbase/doc/CRM.md) | Cross-reference matrix across requirements, code, docs and tests |
+| [Configuration & Settings](docbase/doc/Configuration&Settings.md) | Every variable, name and CI setting |
 
 ## Known issues
 

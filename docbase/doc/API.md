@@ -1,4 +1,4 @@
-# API
+﻿# API
 
 All paths are relative to the gateway at `http://<host>:2380`. Backends are not
 addressable directly.
@@ -8,8 +8,8 @@ addressable directly.
 | Path | Auth | Enforced by |
 |---|---|---|
 | `/reactjs/**` | basic auth | `<Location /reactjs>` in `codebase/apache/vhost.conf` |
-| `/nodejs/**` | **none** | — |
-| `/pma/**` | **none** | — |
+| `/nodejs/**` | **none** | ??|
+| `/pma/**` | **none** | ??|
 
 The unprotected rows are a known gap, not an intended design. See
 [ADR-0005](ADR.md#adr-0005-record-partial-authentication-coverage).
@@ -21,7 +21,7 @@ The unprotected rows are a known gap, not an intended design. See
 | `/reactjs/*` | `http://prototype-application-proxy-reactjs:80` |
 | `/nodejs/*` | `http://prototype-application-proxy-nodejs:3000` |
 | `/pma/*` | `http://prototype-application-proxy-pma:80` |
-| `/` | `RedirectMatch` → `/reactjs/` |
+| `/` | `RedirectMatch` ??`/reactjs/` |
 
 `ProxyPassReverse` is configured for each, so backend redirects are rewritten
 back through the gateway path.
@@ -64,7 +64,7 @@ Returns every row from the `items` table as a JSON array.
 
 The two rows exist because `codebase/mysql/init.sql` seeds them on first
 initialisation. An empty array means the data directory was not empty when the
-container first started — see the `init.sql` gotcha in [CRM.md](CRM.md).
+container first started ??see the `init.sql` gotcha in [Configuration&Settings.md](Configuration&Settings.md).
 
 **Errors.** Unlike the health endpoint, this route has no `try`/`catch`: a
 database failure is returned as an unhandled rejection and surfaces as a `500`
@@ -95,4 +95,4 @@ These exist inside containers but are not routed by the proxy.
 
 ## Related documents
 
-[Architecture.md](Architecture.md) · [Schema.md](Schema.md) · [SRS.md](SRS.md)
+[Architecture.md](Architecture.md) 繚 [Schema.md](Schema.md) 繚 [SRS.md](SRS.md)

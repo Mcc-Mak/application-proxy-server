@@ -121,4 +121,4 @@ both Dockerfiles run `npm install` rather than `npm ci`.
 ## Related documents
 
 [API.md](API.md) · [Schema.md](Schema.md) · [ADR.md](ADR.md) ·
-[CRM.md](CRM.md)
+[CRM.md](CRM.md) · [Configuration&Settings.md](Configuration&Settings.md)
