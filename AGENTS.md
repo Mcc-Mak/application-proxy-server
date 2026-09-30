@@ -14,46 +14,39 @@ container cluster. `proxy -> {reactjs, nodejs, pma}`, `nodejs -> mysql`, `pma ->
 
 Never commit directly to `dev` or `main` — CI auto-merges upward.
 
-## Target layout (not yet created — see "Layout drift")
+## Layout
 
 ```
-codebase/
-  docker-compose.yml        <- the whole runnable stack lives here
-  .env                      <- gitignored, from .env.example
-  .env.example
+codebase/                 everything runnable
+  docker-compose.yml
+  .env.example            copy to .env; .env is gitignored
   apache/ mysql/ nodejs/ reactjs/
-docbase/
+docbase/                  all documentation
   TOCTREE.md
   doc/{PRD,SRS,ProjectCharter,ADR,Architecture,API,Schema,ERD,QuickStart,RTM,CRM}.md
+.github/workflows/        the single pipeline
+README.md CHANGELOG.md AGENTS.md LICENSE .gitignore
 ```
 
-`codebase/` is the single root of everything executable: Compose file, env files, and
-the four services. Only `docbase/`, `README.md`, `CHANGELOG.md`, `AGENTS.md`,
-`LICENSE`, `.gitignore`, and `.github/` live outside it.
+`codebase/` is the single root of everything executable. Nothing runnable may be
+added under `docbase/`, and nothing runnable lives at the repo root.
 
-### Layout drift — current reality
+Two things bite after any move in or out of `codebase/`:
 
-`codebase/` and `docbase/` **do not exist yet**. At repo root today: `apache/`,
-`mysql/`, `nodejs/`, `reactjs/`, `docker-compose.yml`, `.env.example`.
-There is no `CHANGELOG.md` and `README.md` does not reference `TOCTREE.md`. Baseline
-version is **1.0.0**; the first session to create `docbase/` seeds `CHANGELOG.md` at
-1.0.0.
+- The four `build:` paths (`./apache` etc.) and the bind mounts
+  (`./mysql/data`, `./mysql/init.sql`) in `codebase/docker-compose.yml` are
+  resolved **relative to the Compose file**, not the repo root. If the Compose
+  file moves, these need no change; if a service directory moves independently,
+  they do.
+- Compose resolves the default env file from the project directory, which
+  defaults to the directory holding the Compose file. Invoke it from inside
+  `codebase/` (CI uses a job-level `working-directory: codebase`) or pass
+  `--project-directory codebase`, or `.env` is silently not found and every
+  `${MYSQL_*}` expands to empty.
 
-Migration notes for whoever does the move:
-
-- The four `build:` paths in `docker-compose.yml` (`./apache` etc.) are resolved
-  **relative to the compose file**, so moving the file into `codebase/` keeps them
-  valid as `./apache` — do NOT rewrite them to `./codebase/apache`.
-- Same for the bind mounts: `./mysql/data` and `./mysql/init.sql` follow the move.
-- `.gitignore` needs attention: `mysql/data` contains a slash, so git anchors it to
-  the repo root and it will stop matching once the path becomes `codebase/mysql/data`.
-  Change it to `**/mysql/data` (or list both). The bare `.env` pattern has no slash
-  and keeps matching at any depth, so it needs no change.
-- `.env` lookup: Compose resolves the default env file from the project directory,
-  which defaults to the directory holding the compose file. After the move, run
-  Compose from inside `codebase/` (or pass `--project-directory codebase`) or `.env`
-  will silently not be found and every `${MYSQL_*}` expands to empty.
-- README's build/run snippets are root-relative and must be updated in the same pass.
+`.gitignore` is slash-sensitive: `mysql/data` would be anchored to the repo root
+and stop matching `codebase/mysql/data`, so it is written `**/mysql/data`. A
+pattern with no slash, like `.env`, matches at any depth.
 
 ## Branches / CI
 
@@ -83,7 +76,8 @@ and fires only on a push to `dev-001`. Every hop is a `needs:` job inside one ru
   environment, so the job sets throwaway values in its `env:` block and never writes
   a `.env` file. MySQL data is destroyed at job end.
 - `verify` appends a `ci-user` to `apache/.htpasswd` **before** `docker compose
-  build`, because `apache/Dockerfile` `COPY`s that file. It uses `htpasswd -bB`
+  build`, because `apache/Dockerfile` `COPY`s that file. Those relative paths are
+  correct: the job sets `working-directory: codebase`. It uses `htpasswd -bB`
   without `-c` — with `-c` the committed `admin` entry would be destroyed. CI can
   only authenticate as the throwaway user; the real `admin` password is unknown to it.
 - The auth assertions are **asymmetric on purpose**: `/reactjs/` must be `401`
@@ -92,8 +86,7 @@ and fires only on a push to `dev-001`. Every hop is a `needs:` job inside one ru
   extended to those paths, flip those two to `401`.
 - `docker-compose.yml` declares the network `external: true`, so Compose will not
   create it. `verify` creates it explicitly before building. Any new runner or
-  machine needs the same step.
-- `pages` needs `pages: write` + `id-token: write` on top of `contents: write`, and
+  machine needs the same step.- `pages` needs `pages: write` + `id-token: write` on top of `contents: write`, and
   the repo's Pages source must be set to **GitHub Actions** or `deploy-pages` fails.
   Its heredoc in `run: |` relies on the `HTML` terminator sitting at the same
   indent as the body; if you edit the HTML, keep that alignment or the block
@@ -113,14 +106,15 @@ Prerequisites, in order:
 docker network create -d bridge --subnet 172.70.0.0/24 prototype_application_proxy
 
 # 2. .env does not ship; copy the example.
-cp .env.example .env
+cp codebase/.env.example codebase/.env
 
 # 3. htpasswd must exist before the apache image will build (Dockerfile COPYs it).
 #    -c OVERWRITES the file and destroys every other user. Use it once for `admin`,
 #    then add further users WITHOUT -c (2+ users are a project requirement):
-htpasswd -c apache/.htpasswd admin
-htpasswd    apache/.htpasswd user2
+htpasswd -c codebase/apache/.htpasswd admin
+htpasswd    codebase/apache/.htpasswd user2
 
+cd codebase
 docker compose build --no-cache
 docker compose up -d --force-recreate
 ```
@@ -144,7 +138,7 @@ and Compose must be invoked so it finds `codebase/.env` — run from inside `cod
 
 - **`mysql/init.sql` only runs when `mysql/data` is empty.** `/docker-entrypoint-initdb.d`
   is skipped on every restart after the first. To re-apply schema changes you must
-  wipe the bind mount: `rm -rf mysql/data && docker compose up -d`
+  wipe the bind mount: `rm -rf codebase/mysql/data && docker compose up -d`
   (post-migration: `rm -rf codebase/mysql/data`).
 - **`apache/.htpasswd` is committed to git.** Credentials are in version control.
   Treat this as a known debt item; don't add more users to the tracked file without
@@ -163,9 +157,11 @@ and Compose must be invoked so it finds `codebase/.env` — run from inside `cod
 - **No lockfiles are committed.** Both Dockerfiles `COPY package*.json` + `npm install`,
   so image builds are non-reproducible. Commit `package-lock.json` to pin them.
 - **`nodejs/` has no `.dockerignore`** (only `reactjs/` does). A local `node_modules`
-  or stray `.env` gets copied into the image by `COPY . .`.
+  or stray `.env` gets copied into the image by `COPY . .`. `.gitignore` now blocks
+  `node_modules` from being committed, but not from being *built into* the image.
 - **`PMA_ABSOLUTE_URI` hardcodes the host** `http://hkss13:2380/pma/` in
-  `docker-compose.yml`. Change it or phpMyAdmin's redirects break on any other hostname.
+  `codebase/docker-compose.yml`. Change it or phpMyAdmin's redirects break on any
+  other hostname — and CI's `/pma/` assertion can fail on a redirect to it.
 - **Apache base image is `httpd:2.4`** (Debian layout, config under
   `/usr/local/apache2/`), not Alpine. Modules are uncommented in `httpd.conf` via `sed`;
   the vhost is wired in with an `Include conf/extra/vhost.conf` line appended at build
@@ -174,8 +170,8 @@ and Compose must be invoked so it finds `codebase/.env` — run from inside `cod
 ## Conventions
 
 - Docker image / container names are all prefixed `prototype-application-proxy[-suffix]`
-  and `:latest`. `apache/vhost.conf` and `docker-compose.yml` environment blocks must
-  stay in sync — they hardcode these names and the `DB_*` variable names.
+  and `:latest`. `apache/vhost.conf` and `codebase/docker-compose.yml` environment
+  blocks must stay in sync — they hardcode these names and the `DB_*` variable names.
 - `.env` holds `MYSQL_{ROOT_PASSWORD,DATABASE,USER,PASSWORD}`; compose maps them into
   the API as `DB_NAME` / `DB_USER` / `DB_PASS`. Never commit `.env` (it's gitignored).
 - Docs contain a mix of English and Chinese comments. Match the surrounding file's

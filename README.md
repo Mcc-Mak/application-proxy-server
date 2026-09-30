@@ -12,6 +12,21 @@ proxy (apache2, :2380) ──┬──> reactjs   (nginx, static CRA build)
 Only `proxy` publishes a host port. The other three are reachable inside the
 `prototype_application_proxy` Docker network by container name only.
 
+## Layout
+
+```
+codebase/            everything runnable
+  docker-compose.yml
+  .env.example       copy to .env
+  apache/ mysql/ nodejs/ reactjs/
+docbase/             all documentation
+  TOCTREE.md         start here
+  doc/
+```
+
+Full documentation: **[`docbase/TOCTREE.md`](docbase/TOCTREE.md)**.
+Agent-facing conventions and known defects: [`AGENTS.md`](AGENTS.md).
+
 ## Installation
 
 > [!NOTE]
@@ -22,27 +37,28 @@ Only `proxy` publishes a host port. The other three are reachable inside the
 > ```
 
 ```shell
-# Create password for `admin`
-# (add further users WITHOUT -c, which would overwrite the file)
-htpasswd -c apache/.htpasswd admin
-htpasswd    apache/.htpasswd user2
+# .env is not committed
+cp codebase/.env.example codebase/.env
+```
+
+```shell
+# Create the password for `admin`.
+# Add further users WITHOUT -c: it truncates the file and destroys every other user.
+htpasswd -c codebase/apache/.htpasswd admin
+htpasswd    codebase/apache/.htpasswd user2
 ```
 
 ```shell
 # Build all images, and then run the containers
+cd codebase
 docker compose build --no-cache
 docker compose up -d --force-recreate
 ```
 
-`.env` is not committed. Create it first:
-
-```shell
-cp .env.example .env
-```
-
-> [!IMPORTANT]
-> The long-term layout moves `docker-compose.yml`, `.env*` and the four service
-> directories under `codebase/`. See `AGENTS.md` for the migration notes.
+Compose must run from inside `codebase/`, or be given
+`--project-directory codebase`, so it finds `.env` and resolves the `./apache`
+build contexts relative to the Compose file. Full steps and troubleshooting:
+[`docbase/doc/QuickStart.md`](docbase/doc/QuickStart.md).
 
 ## Endpoints
 
@@ -54,8 +70,10 @@ cp .env.example .env
 | `/pma/` | **none** | phpMyAdmin |
 
 Only `/reactjs` is protected. `/pma` and `/nodejs` are currently wide open — this
-contradicts the "gateway safeguards everything" goal and is tracked as known debt.
-`CI` asserts both the protected and unprotected behaviour so the gap stays visible.
+contradicts the "gateway safeguards everything" goal, and the project requires
+two or more users where only one exists. Both are recorded in
+[`docbase/doc/RTM.md`](docbase/doc/RTM.md). CI asserts the current behaviour
+explicitly so the gap stays visible.
 
 ## CI pipeline
 
@@ -86,14 +104,13 @@ flowchart TD
     style DONE fill:#ffcdd2
 ```
 
-The merges used to depend on a push to `dev`/`main` re-triggering a workflow, which
-is why a PAT was strictly necessary. Chaining with `needs:` means one run covers
-the whole promotion, so it shows up as a single status instead of three.
+The merges used to depend on a push to `dev`/`main` re-triggering a workflow, so
+adding a trigger on those branches would now double-merge.
 
 `verify` runs on a throwaway `ubuntu-latest` runner: it creates the external
-network, appends a temporary `ci-user` to `apache/.htpasswd` (the image `COPY`s
-that file, so it has to exist before the build), builds, starts the stack, then
-asserts:
+network, appends a temporary `ci-user` to `codebase/apache/.htpasswd` (the image
+`COPY`s that file, so it has to exist before the build), builds, starts the stack,
+then asserts:
 
 - `/nodejs/api/health` returns `200` — the API and its MySQL round-trip work
 - `/pma/` returns `200`
@@ -110,9 +127,9 @@ this pipeline — nothing is published or promoted.
 
 `pages` builds a small static page and deploys it with `actions/deploy-pages`.
 This is the honest use of GitHub Pages: it serves files only and has no container
-runtime, so it reports the verification result rather than hosting anything.
-The page is also published when `verify` **fails**, so a red result is visible
-instead of leaving the previous green page up.
+runtime, so it reports the verification result rather than hosting anything. The
+page is also published when `verify` **fails**, so a red result is visible instead
+of leaving the previous green page up.
 
 To enable it: **Settings → Pages → Build and deployment → Source: GitHub Actions**.
 
@@ -125,17 +142,33 @@ branches. The PAT account must be allowed to bypass branch protection.
 
 ## Documentation
 
-Full documentation lives under `docbase/`, starting at
-[`docbase/TOCTREE.md`](docbase/TOCTREE.md). *(Not yet created — see `AGENTS.md`
-for the planned structure and the outstanding migration.)*
+| Document | Purpose |
+|---|---|
+| [ProjectCharter](docbase/doc/ProjectCharter.md) | Why it exists, scope, success criteria |
+| [PRD](docbase/doc/PRD.md) | User-facing requirements and current conformance |
+| [SRS](docbase/doc/SRS.md) | Numbered, testable requirements |
+| [ADR](docbase/doc/ADR.md) | Architecture decision records |
+| [Architecture](docbase/doc/Architecture.md) | Topology, request flow, known issues |
+| [API](docbase/doc/API.md) | HTTP surface and auth matrix |
+| [Schema](docbase/doc/Schema.md) | Database schema and seed data |
+| [ERD](docbase/doc/ERD.md) | Entity relationships and access paths |
+| [QuickStart](docbase/doc/QuickStart.md) | Running the stack from scratch |
+| [RTM](docbase/doc/RTM.md) | Requirement → implementation → test |
+| [CRM](docbase/doc/CRM.md) | Every variable, name and CI setting |
 
-Agent-facing conventions, build quirks and known defects are in
-[`AGENTS.md`](AGENTS.md). Notable known issues:
+## Known issues
 
-- `reactjs/src/index.js` calls `/api/health`, which Apache does not proxy, so the
-  on-page health panel never populates.
-- `reactjs/package.json` has no `homepage`, so CRA emits absolute `/static/...`
-  asset paths that 404 under the `/reactjs` prefix.
-- `PMA_ABSOLUTE_URI` in `docker-compose.yml` hardcodes the host `hkss13`.
-- `apache/.htpasswd` is tracked in git.
+Full detail in [`AGENTS.md`](AGENTS.md) and
+[`docbase/doc/Architecture.md`](docbase/doc/Architecture.md#known-issues).
+
+- `codebase/reactjs/src/index.js` calls `/api/health`, which Apache does not
+  proxy, so the on-page health panel never populates.
+- `codebase/reactjs/package.json` has no `homepage`, so CRA emits absolute
+  `/static/...` asset paths that 404 under the `/reactjs` prefix.
+- `PMA_ABSOLUTE_URI` in `codebase/docker-compose.yml` hardcodes the host
+  `hkss13`, so phpMyAdmin redirects break on any other hostname.
+- `codebase/apache/.htpasswd` is tracked in git.
+- Only one user exists; the project requires two or more.
 - Neither `package-lock.json` is committed, so image builds are not reproducible.
+- `codebase/nodejs/` has no `.dockerignore`, so `COPY . .` would copy a local
+  `node_modules` or `.env` into the image.

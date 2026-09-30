@@ -14,7 +14,7 @@ name: Pipeline
 # then torn down. Nothing is deployed to a real host.
 #
 # No repository secrets are needed for verification. The only credential used is
-# a throwaway `ci-user` appended to apache/.htpasswd inside the runner's
+# a throwaway `ci-user` appended to codebase/apache/.htpasswd inside the runner's
 # workspace for that job; it is never committed. MySQL gets an ephemeral
 # password because its data is destroyed at the end of the job.
 
@@ -111,6 +111,17 @@ jobs:
     outputs:
       main_sha: ${{ steps.record.outputs.main_sha }}
 
+    # Everything runnable lives under codebase/. Every `run:` step in this job
+    # executes there, which makes `docker compose` pick up
+    # codebase/docker-compose.yml, resolves the ./apache, ./mysql, ./nodejs and
+    # ./reactjs build contexts against that file, and makes the relative
+    # `apache/.htpasswd` path in the step below resolve to
+    # codebase/apache/.htpasswd. Do not prefix those paths in the steps
+    # themselves - the working directory already does it.
+    defaults:
+      run:
+        working-directory: codebase
+
     steps:
       # Verify main, not the triggering dev-001 commit: main is what the merges
       # just produced and is the state that would be released.
@@ -132,9 +143,9 @@ jobs:
               --subnet 172.70.0.0/24 prototype_application_proxy
           fi
 
-      # apache/Dockerfile COPYs .htpasswd, so the throwaway user has to exist
-      # before the image is built. Appended without -c, which would truncate the
-      # file and destroy the committed `admin` entry.
+      # codebase/apache/Dockerfile COPYs .htpasswd, so the throwaway user has to
+      # exist before the image is built. Appended without -c, which would
+      # truncate the file and destroy the committed `admin` entry.
       - name: Add throwaway auth user for the test
         run: |
           set -euo pipefail

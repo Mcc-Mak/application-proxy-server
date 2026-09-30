@@ -3,6 +3,71 @@
 All notable changes to this project are documented here.
 Format: [semver](https://semver.org/) — `major.minor.patch`.
 
+## [1.3.0]
+
+### Added
+
+- `docbase/` — the documentation tree, satisfying per-change checklist item 2,
+  which had been unsatisfiable since `CHANGELOG.md` was introduced.
+  - `docbase/TOCTREE.md` — index; every document must be listed here.
+  - `docbase/doc/ProjectCharter.md` — purpose, scope, constraints, success
+    criteria, risks.
+  - `docbase/doc/PRD.md` — functional and non-functional requirements with
+    current conformance, including the two unmet requirements.
+  - `docbase/doc/SRS.md` — numbered requirements, each naming what verifies it;
+    "unverified" is recorded explicitly rather than left blank.
+  - `docbase/doc/ADR.md` — eight decision records covering proxy choice, the
+    external network, the static frontend build, workflow consolidation, partial
+    auth coverage, environment substitution, GitHub Pages, and this layout.
+  - `docbase/doc/Architecture.md` — topology, request flow, start ordering, and
+    the known defects.
+  - `docbase/doc/API.md` — HTTP surface, authentication matrix, per-endpoint
+    behaviour including the unhandled rejection on `/api/items`.
+  - `docbase/doc/Schema.md` and `docbase/doc/ERD.md` — the `items` table and the
+    access paths to it.
+  - `docbase/doc/QuickStart.md` — clean-machine setup, verification commands,
+    and a troubleshooting table.
+  - `docbase/doc/RTM.md` — requirement → implementation → verification matrix,
+    with coverage counts and the work each gap implies.
+  - `docbase/doc/CRM.md` — every variable, container name, base image, CI
+    setting and `.gitignore` pattern, with the reasoning behind the non-obvious
+    ones.
+
+### Changed
+
+- **Moved all runnable content under `codebase/`.** `apache/`, `mysql/`,
+  `nodejs/`, `reactjs/`, `docker-compose.yml` and `.env.example` were relocated
+  with `git mv`, so all 16 files are recorded as renames and history is intact.
+  `codebase/` is now the single root of everything executable; nothing runnable
+  remains at the repository root or may be added under `docbase/`.
+- **Repointed the CI pipeline at `codebase/`.** The `verify` job now sets
+  `working-directory: codebase`, so `docker compose` resolves
+  `codebase/docker-compose.yml` and the relative `./apache` build contexts. It
+  also makes the `htpasswd` step's `apache/.htpasswd` path resolve to
+  `codebase/apache/.htpasswd`. Without this the pipeline would have failed.
+- `.gitignore` rewritten with the reasons inline: `mysql/data` became
+  `**/mysql/data` because a pattern containing a slash is anchored to the
+  `.gitignore`'s own directory and would have silently stopped matching
+  `codebase/mysql/data`; `**/node_modules` and `**/build` were added so local
+  build artefacts cannot be committed.
+- `README.md` rewritten: new layout, `codebase/`-prefixed commands, a document
+  table, and a working link to `docbase/TOCTREE.md` (previously a broken link).
+- `AGENTS.md` — the "Layout drift" section is replaced by a description of the
+  layout that now exists, including the two things that break when content moves
+  across the `codebase/` boundary.
+
+### Notes
+
+- `codebase/docker-compose.yml` itself needed **no** changes. Its `build:` paths
+  and bind mounts are resolved relative to the Compose file, so they followed the
+  move unchanged.
+- `CHANGELOG.md` entries for 1.0.0–1.2.0 still describe paths at the repository
+  root. They are left as written, because a changelog records what was true at
+  the time.
+- Nothing in `codebase/` was modified beyond relocation, so the verification
+  result from 1.2.0 still applies. It has not been re-run against this tree
+  locally, since no Docker daemon is available in the authoring environment.
+
 ## [1.2.0]
 
 ### Added
